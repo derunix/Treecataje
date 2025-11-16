@@ -23,6 +23,9 @@ MainMenu::MainMenu() {
 #if defined(HAS_NS4168_SPKR)
         &radioMenu,
 #endif
+#if defined(HAS_NS4168_SPKR) || defined(MIC_SPM1423)
+        &audioMenu,
+#endif
         &fileMenu,
         &gpsMenu,
 #if !defined(REMOVE_NRF_MENU)

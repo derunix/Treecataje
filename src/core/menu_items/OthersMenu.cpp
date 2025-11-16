@@ -5,7 +5,6 @@
 #include "modules/bjs_interpreter/interpreter.h"
 #include "modules/others/clicker.h"
 #include "modules/others/ibutton.h"
-#include "modules/others/mic.h"
 #include "modules/others/openhaystack.h"
 #include "modules/others/qrcode_menu.h"
 #include "modules/others/timer.h"
@@ -15,10 +14,6 @@ void OthersMenu::optionsMenu() {
     options = {
         {"QRCodes",      qrcode_menu                              },
         {"Megalodon",    shark_setup                              },
-#ifdef MIC_SPM1423
-        {"Mic Spectrum", mic_test                                 },
-        {"Mic Record",   mic_record                               }, //@deveclipse
-#endif
         {"BadUSB",       [=]() { ducky_setup(hid_usb, false); }   },
         {"USB Keyboard", [=]() { ducky_keyboard(hid_usb, false); }},
 #ifdef USB_as_HID

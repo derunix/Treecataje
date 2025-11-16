@@ -20,6 +20,7 @@
 #include "menu_items/RFMenu.h"
 #include "menu_items/ScriptsMenu.h"
 #include "menu_items/WifiMenu.h"
+#include "menu_items/AudioMenu.h"
 
 class MainMenu {
 public:
@@ -31,6 +32,7 @@ public:
     PowerMenu powerMenu;
     FMMenu fmMenu;
     RadioMenu radioMenu;
+    AudioMenu audioMenu;
     GpsMenu gpsMenu;
     IRMenu irMenu;
     NRF24Menu nrf24Menu;
