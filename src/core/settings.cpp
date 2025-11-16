@@ -1438,13 +1438,6 @@ RELOAD:
     } else {
         options = {};
         gpio_num_t sel = GPIO_NUM_NC;
-        int index = 0;
-        if (opt == 1) index = points.sck + 1;
-        else if (opt == 2) index = points.miso + 1;
-        else if (opt == 3) index = points.mosi + 1;
-        else if (opt == 4) index = points.cs + 1;
-        else if (opt == 5) index = points.io0 + 1;
-        else if (opt == 6) index = points.io2 + 1;
         for (int8_t i = -1; i <= GPIO_NUM_MAX; i++) {
             String tmp = String(i);
             options.push_back({tmp.c_str(), [i, &sel]() { sel = (gpio_num_t)i; }});

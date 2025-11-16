@@ -112,21 +112,23 @@ void __attribute__((weak)) taskInputHandler(void *parameter) {
         return state.latched;
     };
 
+    struct Snapshot {
+        bool next;
+        bool prev;
+        bool up;
+        bool down;
+        bool sel;
+        bool esc;
+        bool any;
+        bool serial;
+        bool nextPage;
+        bool prevPage;
+        bool longPress;
+        TouchPoint touch;
+    };
+
     auto copyInputFlags = [&]() {
-        struct Snapshot {
-            bool next;
-            bool prev;
-            bool up;
-            bool down;
-            bool sel;
-            bool esc;
-            bool any;
-            bool serial;
-            bool nextPage;
-            bool prevPage;
-            bool longPress;
-            TouchPoint touch;
-        } snapshot{};
+        Snapshot snapshot{};
 
         portENTER_CRITICAL(&inputMux);
         snapshot.next = NextPress;
@@ -146,7 +148,7 @@ void __attribute__((weak)) taskInputHandler(void *parameter) {
         return snapshot;
     };
 
-    auto writeFilteredFlags = [&](const auto &snapshot) {
+    auto writeFilteredFlags = [&](const Snapshot &snapshot) {
         portENTER_CRITICAL(&inputMux);
         NextPress = snapshot.next;
         PrevPress = snapshot.prev;
@@ -176,22 +178,21 @@ void __attribute__((weak)) taskInputHandler(void *parameter) {
         uint32_t now = millis();
         if (!AnyKeyPress || now - timer > debounceMs) {
             InputHandler();
-            auto rawSnapshot = copyInputFlags();
+            Snapshot rawSnapshot = copyInputFlags();
 
-            struct FilteredSnapshot {
-                bool next;
-                bool prev;
-                bool up;
-                bool down;
-                bool sel;
-                bool esc;
-                bool any;
-                bool serial;
-                bool nextPage;
-                bool prevPage;
-                bool longPress;
-                TouchPoint touch;
-            } filtered = rawSnapshot;
+            Snapshot filtered;
+            filtered.next = rawSnapshot.next;
+            filtered.prev = rawSnapshot.prev;
+            filtered.up = rawSnapshot.up;
+            filtered.down = rawSnapshot.down;
+            filtered.sel = rawSnapshot.sel;
+            filtered.esc = rawSnapshot.esc;
+            filtered.any = rawSnapshot.any;
+            filtered.serial = rawSnapshot.serial;
+            filtered.nextPage = rawSnapshot.nextPage;
+            filtered.prevPage = rawSnapshot.prevPage;
+            filtered.longPress = rawSnapshot.longPress;
+            filtered.touch = rawSnapshot.touch;
 
             for (auto &button : trackedButtons) {
                 bool raw = false;
