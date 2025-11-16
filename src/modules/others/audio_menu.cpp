@@ -4,6 +4,7 @@
 #include "core/display.h"
 #include "core/sd_functions.h"
 #include <algorithm>
+#include <functional>
 
 #if !defined(HAS_NS4168_SPKR)
 
@@ -91,14 +92,16 @@ static std::vector<AudioTrack> collectAudioLibrary() {
 
 static void drawNowPlaying(const AudioTrack &track, int index, int total, const char *title) {
     drawMainBorderWithTitle(title);
-    padprintln("");
+    printSubtitle("Now Playing", true);
+    padprintln(String("Track ") + (index + 1) + " of " + total);
     padprintln(String("Source: ") + track.source);
-    padprintln(String("Track: ") + track.label);
+    padprintln(String("File:   ") + track.label);
     padprintln("");
-    padprintf("Position: %d/%d\n", index + 1, total);
-    padprintln("");
-    padprintln("Prev/Next: change track");
-    padprintln("Esc: exit  Sel: replay");
+    padprintln("Controls:");
+    padprintln(" Prev/Next - change track");
+    padprintln(" Sel       - replay");
+    padprintln(" Esc       - exit");
+    displayRedStripe("Playing... press Prev/Next/Sel/Esc", TFT_WHITE, bruceConfig.priColor);
 }
 
 static void playPlaylist(std::vector<AudioTrack> &tracks, int startIndex, const char *title) {
@@ -132,6 +135,30 @@ static void playPlaylist(std::vector<AudioTrack> &tracks, int startIndex, const 
     }
 }
 
+static void renderTrackMenu(
+    const char *title, std::vector<AudioTrack> &tracks, const std::function<void()> &refreshFn, bool showRescan
+) {
+    bool exit = false;
+    int index = 0;
+    while (!exit) {
+        options.clear();
+        for (int i = 0; i < (int)tracks.size(); i++) {
+            String label = String(i + 1) + ". " + tracks[i].source + " • " + tracks[i].label;
+            options.push_back({label, [&, i]() { playPlaylist(tracks, i, title); }});
+        }
+        if (showRescan) {
+            options.push_back({"Rescan library", [&]() {
+                                   refreshFn();
+                                   index = 0;
+                               }});
+        }
+        options.push_back({"Back", [&]() { exit = true; }});
+
+        index = loopOptions(options, MENU_TYPE_SUBMENU, title, index);
+        if (index < 0 || exit || index >= (int)options.size()) exit = true;
+    }
+}
+
 void audioRecordingsMenu() {
     if (!bruceConfig.soundEnabled) {
         displayWarning("Sound is disabled", true);
@@ -144,21 +171,7 @@ void audioRecordingsMenu() {
         return;
     }
 
-    bool exit = false;
-    int index = 0;
-    while (!exit) {
-        options.clear();
-        for (int i = 0; i < (int)tracks.size(); i++) {
-            options.push_back({
-                String(tracks[i].source + " - " + tracks[i].label),
-                [&, i]() { playPlaylist(tracks, i, "Dictaphone"); }
-            });
-        }
-        options.push_back({"Back", [&]() { exit = true; }});
-
-        index = loopOptions(options, MENU_TYPE_SUBMENU, "Recordings", index);
-        if (index < 0 || exit || index >= (int)tracks.size()) exit = true;
-    }
+    renderTrackMenu("Recordings", tracks, [&]() { tracks = collectRecordings(); }, true);
 }
 
 void audioPlayerMenu() {
@@ -173,25 +186,7 @@ void audioPlayerMenu() {
         return;
     }
 
-    bool exit = false;
-    int index = 0;
-    while (!exit) {
-        options.clear();
-        for (int i = 0; i < (int)tracks.size(); i++) {
-            options.push_back({
-                String(tracks[i].source + " - " + tracks[i].label),
-                [&, i]() { playPlaylist(tracks, i, "Audio Player"); }
-            });
-        }
-        options.push_back({"Rescan", [&]() {
-                               tracks = collectAudioLibrary();
-                               index = 0;
-                           }});
-        options.push_back({"Back", [&]() { exit = true; }});
-
-        index = loopOptions(options, MENU_TYPE_SUBMENU, "Audio Files", index);
-        if (index < 0 || exit || index >= (int)tracks.size() + 2) { exit = true; }
-    }
+    renderTrackMenu("Audio Files", tracks, [&]() { tracks = collectAudioLibrary(); }, true);
 }
 
 #endif // HAS_NS4168_SPKR
