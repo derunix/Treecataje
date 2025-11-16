@@ -172,7 +172,7 @@ void InputHandler(void) {
     static unsigned long tm = millis();  // debauce for buttons
     static unsigned long tm2 = millis(); // delay between Select and encoder (avoid missclick)
     static unsigned long lastEncoderStepMs = millis();
-    static const unsigned long encoderStepDelayMs = 175; // minimum gap between encoder steps
+    static const unsigned long encoderStepDelayMs = 350; // minimum gap between encoder steps
     static int _last_dir = 0;
     unsigned long now = millis();
     bool sel = !BTN_ACT;
