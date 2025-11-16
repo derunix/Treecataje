@@ -171,12 +171,15 @@ IRAM_ATTR void checkPosition() {
 void InputHandler(void) {
     static unsigned long tm = millis();  // debauce for buttons
     static unsigned long tm2 = millis(); // delay between Select and encoder (avoid missclick)
+    static unsigned long lastEncoderStepMs = millis();
+    static const unsigned long encoderStepDelayMs = 175; // minimum gap between encoder steps
     static int _last_dir = 0;
+    unsigned long now = millis();
     bool sel = !BTN_ACT;
     bool esc = !BTN_ACT;
     _last_dir = (int)encoder->getDirection();
 
-    if (millis() - tm > 200 || LongPress) {
+    if (now - tm > 200 || LongPress) {
         sel = digitalRead(SEL_BTN);
 #ifdef T_EMBED_1101
         esc = digitalRead(BK_BTN);
@@ -186,13 +189,17 @@ void InputHandler(void) {
         if (!wakeUpScreen()) AnyKeyPress = true;
         else return;
     }
+    if (_last_dir != 0 && now - lastEncoderStepMs < encoderStepDelayMs) {
+        _last_dir = 0; // ignore bounce-like repeats within the guard window
+    }
     if (_last_dir > 0) {
         _last_dir = 0;
         PrevPress = true;
 #ifdef HAS_ENCODER_LED
         EncoderLedChange = -1;
 #endif
-        tm2 = millis();
+        tm2 = now;
+        lastEncoderStepMs = now;
     }
     if (_last_dir < 0) {
         _last_dir = 0;
@@ -200,19 +207,20 @@ void InputHandler(void) {
 #ifdef HAS_ENCODER_LED
         EncoderLedChange = 1;
 #endif
-        tm2 = millis();
+        tm2 = now;
+        lastEncoderStepMs = now;
     }
 
-    if (sel == BTN_ACT && millis() - tm2 > 200) {
+    if (sel == BTN_ACT && now - tm2 > 200) {
         _last_dir = 0;
         SelPress = true;
-        tm = millis();
+        tm = now;
     }
     if (esc == BTN_ACT) {
         AnyKeyPress = true;
         EscPress = true;
         Serial.println("EscPressed");
-        tm = millis();
+        tm = now;
     }
 }
 
