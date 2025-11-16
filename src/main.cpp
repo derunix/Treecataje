@@ -9,6 +9,9 @@
 #include "core/utils.h"
 #include "esp32-hal-psram.h"
 #include "esp_task_wdt.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/portmacro.h"
+#include <array>
 #include <functional>
 #include <string>
 #include <vector>
@@ -52,6 +55,114 @@ keyStroke KeyStroke;
 
 TaskHandle_t xHandle;
 void __attribute__((weak)) taskInputHandler(void *parameter) {
+    static portMUX_TYPE inputMux = portMUX_INITIALIZER_UNLOCKED;
+    static constexpr uint32_t debounceMs = 75;
+    static constexpr uint32_t longHoldThresholdMs = 1200;
+
+    struct ButtonState {
+        uint32_t lastChangeMs = 0;
+        uint32_t lastHoldLogMs = 0;
+        bool latched = false;
+    };
+
+    struct ButtonTracker {
+        volatile bool *flag;
+        const char *name;
+        ButtonState state;
+    };
+
+    std::array<ButtonTracker, 10> trackedButtons = {
+        ButtonTracker{&NextPress, "Next"},      ButtonTracker{&PrevPress, "Prev"},
+        ButtonTracker{&UpPress, "Up"},          ButtonTracker{&DownPress, "Down"},
+        ButtonTracker{&SelPress, "Select"},     ButtonTracker{&EscPress, "Escape"},
+        ButtonTracker{&NextPagePress, "Page+"}, ButtonTracker{&PrevPagePress, "Page-"},
+        ButtonTracker{&LongPress, "Long"},      ButtonTracker{&SerialCmdPress, "Serial"},
+    };
+
+    uint32_t lastTouchChangeMs = 0;
+    bool touchLatched = false;
+
+    auto logAnomaly = [](const char *kind, const char *name, uint32_t delta) {
+        String msg = String("[input]") + kind + " on " + name + " (" + delta + "ms)";
+        Serial.println(msg);
+        tft.println(msg);
+    };
+
+    auto applyDebounce = [&](ButtonTracker &button, bool raw, uint32_t now) {
+        ButtonState &state = button.state;
+
+        if (raw) {
+            if (!state.latched) {
+                if (now - state.lastChangeMs < debounceMs) {
+                    logAnomaly(" double", button.name, now - state.lastChangeMs);
+                } else {
+                    state.latched = true;
+                    state.lastChangeMs = now;
+                }
+            } else if (state.lastHoldLogMs != state.lastChangeMs && now - state.lastChangeMs >= longHoldThresholdMs) {
+                state.lastHoldLogMs = state.lastChangeMs;
+                logAnomaly(" long hold", button.name, now - state.lastChangeMs);
+            }
+        } else if (state.latched && now - state.lastChangeMs >= debounceMs) {
+            state.latched = false;
+            state.lastChangeMs = now;
+            state.lastHoldLogMs = 0;
+        }
+
+        return state.latched;
+    };
+
+    auto copyInputFlags = [&]() {
+        struct Snapshot {
+            bool next;
+            bool prev;
+            bool up;
+            bool down;
+            bool sel;
+            bool esc;
+            bool any;
+            bool serial;
+            bool nextPage;
+            bool prevPage;
+            bool longPress;
+            TouchPoint touch;
+        } snapshot{};
+
+        portENTER_CRITICAL(&inputMux);
+        snapshot.next = NextPress;
+        snapshot.prev = PrevPress;
+        snapshot.up = UpPress;
+        snapshot.down = DownPress;
+        snapshot.sel = SelPress;
+        snapshot.esc = EscPress;
+        snapshot.any = AnyKeyPress;
+        snapshot.serial = SerialCmdPress;
+        snapshot.nextPage = NextPagePress;
+        snapshot.prevPage = PrevPagePress;
+        snapshot.longPress = LongPress;
+        snapshot.touch = touchPoint;
+        portEXIT_CRITICAL(&inputMux);
+
+        return snapshot;
+    };
+
+    auto writeFilteredFlags = [&](const auto &snapshot) {
+        portENTER_CRITICAL(&inputMux);
+        NextPress = snapshot.next;
+        PrevPress = snapshot.prev;
+        UpPress = snapshot.up;
+        DownPress = snapshot.down;
+        SelPress = snapshot.sel;
+        EscPress = snapshot.esc;
+        AnyKeyPress = snapshot.any;
+        SerialCmdPress = snapshot.serial;
+        NextPagePress = snapshot.nextPage;
+        PrevPagePress = snapshot.prevPage;
+        LongPress = snapshot.longPress;
+        touchPoint = snapshot.touch;
+        portEXIT_CRITICAL(&inputMux);
+    };
+
     auto timer = millis();
     bool backPressLatched = false;
     while (true) {
@@ -62,22 +173,75 @@ void __attribute__((weak)) taskInputHandler(void *parameter) {
         // and navigation gets stuck, the idea here is run the input detection
         // if AnyKeyPress is false, or rerun if it was not renewed within 75ms (arbitrary)
         // because AnyKeyPress will be true if didn´t passed through a check(bool var)
-        if (!AnyKeyPress || millis() - timer > 75) {
-            NextPress = false;
-            PrevPress = false;
-            UpPress = false;
-            DownPress = false;
-            SelPress = false;
-            EscPress = false;
-            AnyKeyPress = false;
-            SerialCmdPress = false;
-            NextPagePress = false;
-            PrevPagePress = false;
-            touchPoint.pressed = false;
-            touchPoint.Clear();
+        uint32_t now = millis();
+        if (!AnyKeyPress || now - timer > debounceMs) {
             InputHandler();
-            backPressLatched = EscPress || KeyStroke.exit_key || KeyStroke.del;
-            timer = millis();
+            auto rawSnapshot = copyInputFlags();
+
+            struct FilteredSnapshot {
+                bool next;
+                bool prev;
+                bool up;
+                bool down;
+                bool sel;
+                bool esc;
+                bool any;
+                bool serial;
+                bool nextPage;
+                bool prevPage;
+                bool longPress;
+                TouchPoint touch;
+            } filtered = rawSnapshot;
+
+            for (auto &button : trackedButtons) {
+                bool raw = false;
+                if (button.flag == &NextPress) raw = rawSnapshot.next;
+                else if (button.flag == &PrevPress) raw = rawSnapshot.prev;
+                else if (button.flag == &UpPress) raw = rawSnapshot.up;
+                else if (button.flag == &DownPress) raw = rawSnapshot.down;
+                else if (button.flag == &SelPress) raw = rawSnapshot.sel;
+                else if (button.flag == &EscPress) raw = rawSnapshot.esc;
+                else if (button.flag == &NextPagePress) raw = rawSnapshot.nextPage;
+                else if (button.flag == &PrevPagePress) raw = rawSnapshot.prevPage;
+                else if (button.flag == &LongPress) raw = rawSnapshot.longPress;
+                else if (button.flag == &SerialCmdPress) raw = rawSnapshot.serial;
+
+                bool debounced = applyDebounce(button, raw, now);
+
+                if (button.flag == &NextPress) filtered.next = debounced;
+                else if (button.flag == &PrevPress) filtered.prev = debounced;
+                else if (button.flag == &UpPress) filtered.up = debounced;
+                else if (button.flag == &DownPress) filtered.down = debounced;
+                else if (button.flag == &SelPress) filtered.sel = debounced;
+                else if (button.flag == &EscPress) filtered.esc = debounced;
+                else if (button.flag == &NextPagePress) filtered.nextPage = debounced;
+                else if (button.flag == &PrevPagePress) filtered.prevPage = debounced;
+                else if (button.flag == &LongPress) filtered.longPress = debounced;
+                else if (button.flag == &SerialCmdPress) filtered.serial = debounced;
+            }
+
+            filtered.any = filtered.next || filtered.prev || filtered.up || filtered.down ||
+                           filtered.sel || filtered.esc || filtered.nextPage || filtered.prevPage ||
+                           filtered.longPress || filtered.serial || rawSnapshot.any;
+
+            if (rawSnapshot.touch.pressed) {
+                if (!touchLatched && now - lastTouchChangeMs < debounceMs) {
+                    logAnomaly(" double", "Touch", now - lastTouchChangeMs);
+                    filtered.touch.Clear();
+                } else {
+                    touchLatched = true;
+                    lastTouchChangeMs = now;
+                    filtered.touch = rawSnapshot.touch;
+                }
+            } else if (touchLatched && now - lastTouchChangeMs >= debounceMs) {
+                touchLatched = false;
+                lastTouchChangeMs = now;
+                filtered.touch.Clear();
+            }
+
+            writeFilteredFlags(filtered);
+            backPressLatched = filtered.esc || KeyStroke.exit_key || KeyStroke.del;
+            timer = now;
         }
         EmergencyReboot::update(backPressLatched);
         vTaskDelay(pdMS_TO_TICKS(10));
