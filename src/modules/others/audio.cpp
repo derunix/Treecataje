@@ -8,6 +8,7 @@
 #include "core/mykeyboard.h"
 #include <ESP8266Audio.h>
 #include <ESP8266SAM.h>
+#include "driver/i2s.h"
 
 #ifdef ESP32
 #include <esp_idf_version.h>
@@ -31,9 +32,19 @@ static bool configureI2SPinout(AudioOutputI2S *output) {
 }
 
 #if defined(HAS_NS4168_SPKR)
+static bool audioI2SActive = false;
 
 bool playAudioFile(FS *fs, String filepath) {
     if (!bruceConfig.soundEnabled) return false;
+
+    // Clear stale key state so playback is not aborted immediately
+    AnyKeyPress = false;
+
+    // Make sure no stale I2S driver instance is hanging around
+    if (audioI2SActive) {
+        i2s_driver_uninstall(I2S_NUM_0);
+        audioI2SActive = false;
+    }
 
     AudioFileSource *source = new AudioFileSourceFS(*fs, filepath.c_str());
     if (!source) return false;
@@ -76,9 +87,21 @@ bool playAudioFile(FS *fs, String filepath) {
     } */
     if (generator && source && audioout) {
         Serial.println("Start audio");
-        generator->begin(source, audioout);
+        if (!generator->begin(source, audioout)) {
+            Serial.println("Audio begin failed");
+            delete generator;
+            delete source;
+            delete audioout;
+            if (audioI2SActive) {
+                i2s_driver_uninstall(I2S_NUM_0);
+                audioI2SActive = false;
+            }
+            return false;
+        }
+        audioI2SActive = true;
         while (generator->isRunning()) {
             if (!generator->loop() || check(AnyKeyPress)) generator->stop();
+            vTaskDelay(1); // yield to feed WDT
         }
         audioout->stop();
         source->close();
@@ -87,10 +110,18 @@ bool playAudioFile(FS *fs, String filepath) {
         delete generator;
         delete source;
         delete audioout;
+        if (audioI2SActive) {
+            i2s_driver_uninstall(I2S_NUM_0);
+            audioI2SActive = false;
+        }
 
         return true;
     }
     // else
+    if (audioI2SActive) {
+        i2s_driver_uninstall(I2S_NUM_0);
+        audioI2SActive = false;
+    }
     return false; // init error
 }
 

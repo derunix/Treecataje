@@ -10,6 +10,7 @@
 #define SPECTRUM_WIDTH 200
 #define SPECTRUM_HEIGHT 124
 #define HISTORY_LEN (SPECTRUM_WIDTH + 1)
+#define MIC_SAMPLE_RATE 16000
 
 static int8_t *i2s_buffer = nullptr;
 static uint8_t *fftHistory = nullptr; // Linear buffer [WIDTH + 1][HEIGHT]
@@ -86,9 +87,9 @@ bool deinitMicroPhone() {
 bool InitI2SMicroPhone() {
     i2s_config_t i2s_config = {
         .mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_RX | I2S_MODE_PDM),
-        .sample_rate = 48000,
+        .sample_rate = MIC_SAMPLE_RATE,
         .bits_per_sample = I2S_BITS_PER_SAMPLE_16BIT,
-        .channel_format = I2S_CHANNEL_FMT_ALL_RIGHT,
+        .channel_format = I2S_CHANNEL_FMT_ONLY_RIGHT,
         .communication_format = I2S_COMM_FORMAT_STAND_I2S,
         .intr_alloc_flags = ESP_INTR_FLAG_LEVEL1,
         .dma_buf_count = 8,
@@ -110,7 +111,7 @@ bool InitI2SMicroPhone() {
     esp_err_t err = ESP_OK;
     err |= i2s_driver_install(I2S_NUM_0, &i2s_config, 0, NULL);
     err |= i2s_set_pin(I2S_NUM_0, &pin_config);
-    err |= i2s_set_clk(I2S_NUM_0, 48000, I2S_BITS_PER_SAMPLE_16BIT, I2S_CHANNEL_MONO);
+    err |= i2s_set_clk(I2S_NUM_0, MIC_SAMPLE_RATE, I2S_BITS_PER_SAMPLE_16BIT, I2S_CHANNEL_MONO);
 
     return (err == ESP_OK);
 }
@@ -241,16 +242,31 @@ void mic_test() {
 
 // https://github.com/MhageGH/esp32_SoundRecorder/tree/master
 
-void CreateWavHeader(byte *header, int waveDataSize) {
+static inline void writeUint16LE(byte *buffer, int offset, uint16_t value) {
+    buffer[offset] = value & 0xFF;
+    buffer[offset + 1] = (value >> 8) & 0xFF;
+}
+
+static inline void writeUint32LE(byte *buffer, int offset, uint32_t value) {
+    buffer[offset] = value & 0xFF;
+    buffer[offset + 1] = (value >> 8) & 0xFF;
+    buffer[offset + 2] = (value >> 16) & 0xFF;
+    buffer[offset + 3] = (value >> 24) & 0xFF;
+}
+
+void CreateWavHeader(byte *header, unsigned long waveDataSize) {
+    // Build a minimal PCM WAV header matching the capture settings.
+    const uint16_t numChannels = 1;
+    const uint16_t bitsPerSample = 16;
+    const uint32_t byteRate = MIC_SAMPLE_RATE * numChannels * (bitsPerSample / 8);
+    const uint16_t blockAlign = numChannels * (bitsPerSample / 8);
+    const uint32_t fileSizeMinus8 = waveDataSize + 36;
+
     header[0] = 'R';
     header[1] = 'I';
     header[2] = 'F';
     header[3] = 'F';
-    unsigned int fileSizeMinus8 = waveDataSize + 44 - 8;
-    header[4] = (byte)(fileSizeMinus8 & 0xFF);
-    header[5] = (byte)((fileSizeMinus8 >> 8) & 0xFF);
-    header[6] = (byte)((fileSizeMinus8 >> 16) & 0xFF);
-    header[7] = (byte)((fileSizeMinus8 >> 24) & 0xFF);
+    writeUint32LE(header, 4, fileSizeMinus8);
     header[8] = 'W';
     header[9] = 'A';
     header[10] = 'V';
@@ -259,34 +275,18 @@ void CreateWavHeader(byte *header, int waveDataSize) {
     header[13] = 'm';
     header[14] = 't';
     header[15] = ' ';
-    header[16] = 0x10; // linear PCM
-    header[17] = 0x00;
-    header[18] = 0x00;
-    header[19] = 0x00;
-    header[20] = 0x01; // linear PCM
-    header[21] = 0x00;
-    header[22] = 0x01; // monoral
-    header[23] = 0x00;
-    header[24] = 0x80; // sampling rate 48000
-    header[25] = 0xBB;
-    header[26] = 0x00;
-    header[27] = 0x00;
-    header[28] = 0x00; // Byte/sec = 48000x2x1 = 96000
-    header[29] = 0x77;
-    header[30] = 0x01;
-    header[31] = 0x00;
-    header[32] = 0x02; // 16bit monoral
-    header[33] = 0x00;
-    header[34] = 0x10; // 16bit
-    header[35] = 0x00;
+    writeUint32LE(header, 16, 16); // PCM fmt chunk size
+    writeUint16LE(header, 20, 1); // PCM format
+    writeUint16LE(header, 22, numChannels);
+    writeUint32LE(header, 24, MIC_SAMPLE_RATE);
+    writeUint32LE(header, 28, byteRate);
+    writeUint16LE(header, 32, blockAlign);
+    writeUint16LE(header, 34, bitsPerSample);
     header[36] = 'd';
     header[37] = 'a';
     header[38] = 't';
     header[39] = 'a';
-    header[40] = (byte)(waveDataSize & 0xFF);
-    header[41] = (byte)((waveDataSize >> 8) & 0xFF);
-    header[42] = (byte)((waveDataSize >> 16) & 0xFF);
-    header[43] = (byte)((waveDataSize >> 24) & 0xFF);
+    writeUint32LE(header, 40, waveDataSize);
 }
 
 static String formatDurationMs(unsigned long ms) {

@@ -113,25 +113,28 @@ static void playPlaylist(std::vector<AudioTrack> &tracks, int startIndex, const 
         drawNowPlaying(tracks[index], index, tracks.size(), title);
 
         bool played = playAudioFile(tracks[index].fs, tracks[index].path);
-        if (!played) displayError("Playback failed", true);
-
-        if (check(EscPress)) {
-            exit = true;
-            break;
+        if (!played) {
+            displayError("Playback failed", true);
+            return; // avoid hammering I2S on repeated failures
         }
 
-        if (check(PrevPress)) {
-            index = (index == 0) ? tracks.size() - 1 : index - 1;
-            continue;
+        // Wait for explicit user action; no auto-advance
+        while (true) {
+            vTaskDelay(50 / portTICK_PERIOD_MS);
+            if (check(EscPress)) {
+                exit = true;
+                break;
+            }
+            if (check(PrevPress)) {
+                index = (index == 0) ? tracks.size() - 1 : index - 1;
+                break;
+            }
+            if (check(NextPress)) {
+                index = (index + 1) % tracks.size();
+                break;
+            }
+            if (check(SelPress)) break; // replay same track
         }
-        if (check(NextPress)) {
-            index = (index + 1) % tracks.size();
-            continue;
-        }
-        if (check(SelPress)) continue; // replay current track
-
-        // Auto-advance to the next track when playback ends normally
-        index = (index + 1) % tracks.size();
     }
 }
 
@@ -143,7 +146,7 @@ static void renderTrackMenu(
     while (!exit) {
         options.clear();
         for (int i = 0; i < (int)tracks.size(); i++) {
-            String label = String(i + 1) + ". " + tracks[i].source + " • " + tracks[i].label;
+            String label = String(i + 1) + ". " + tracks[i].source + " - " + tracks[i].label;
             options.push_back({label, [&, i]() { playPlaylist(tracks, i, title); }});
         }
         if (showRescan) {
