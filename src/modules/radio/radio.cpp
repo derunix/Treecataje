@@ -619,7 +619,27 @@ void showPlayback(const RadioStation &station) {
         return;
     }
     RADIO_LOGI("Entered playback loop");
-    
+    unsigned long lastInputMs = 0;
+    unsigned long cooldownUntil = 0;
+    int noisyHits = 0;
+
+    auto debouncedPressed = [&](volatile bool &btn, uint32_t minGapMs = 250) -> bool {
+        if (!check(btn)) return false;
+        unsigned long now = millis();
+        if (now < cooldownUntil || (now - lastInputMs) < minGapMs) {
+            noisyHits++;
+            if (noisyHits > 4) {
+                cooldownUntil = now + 1200;
+                noisyHits = 0;
+            }
+            return false;
+        }
+        noisyHits = 0;
+        lastInputMs = now;
+        cooldownUntil = now + 400;
+        return true;
+    };
+
     // Clear any pending input - use aggressive clearing to prevent phantom presses
     clearInputsAndWait();
     delay(100); // Additional delay to ensure input is cleared
@@ -628,15 +648,15 @@ void showPlayback(const RadioStation &station) {
     unsigned long volumeDisplayTimeout = 0;
     int lastVolume = bruceConfig.soundVolume;
     bool volumeChanged = false;
-    
+
     // Main playback loop - using nrf_spectrum pattern: while (!check(EscPress))
-    while (!check(EscPress)) {
+    while (!debouncedPressed(EscPress)) {
         const unsigned long now = millis();
-        
+
         // Handle volume control
-        bool volumeUp = check(UpPress) || check(PrevPress);   // Up button or encoder left/up
-        bool volumeDown = check(DownPress) || check(NextPress); // Down button or encoder right/down
-        
+        bool volumeUp = debouncedPressed(UpPress, 120) || debouncedPressed(PrevPress, 120);
+        bool volumeDown = debouncedPressed(DownPress, 120) || debouncedPressed(NextPress, 120);
+
         if (volumeUp || volumeDown) {
             int newVolume = bruceConfig.soundVolume;
             if (volumeUp) {

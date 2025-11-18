@@ -112,6 +112,7 @@ bool InitI2SMicroPhone() {
     err |= i2s_driver_install(I2S_NUM_0, &i2s_config, 0, NULL);
     err |= i2s_set_pin(I2S_NUM_0, &pin_config);
     err |= i2s_set_clk(I2S_NUM_0, MIC_SAMPLE_RATE, I2S_BITS_PER_SAMPLE_16BIT, I2S_CHANNEL_MONO);
+    i2s_zero_dma_buffer(I2S_NUM_0);
 
     return (err == ESP_OK);
 }
@@ -435,7 +436,17 @@ void mic_record() {
     audioFile.seek(0);
     CreateWavHeader(header, dataSize);
     audioFile.write(header, headerSize);
+    audioFile.flush();
     audioFile.close();
+
+    // Rewrite header once more to guarantee a clean RIFF chunk
+    File fix = fs->open(targetPath, "r+");
+    if (fix) {
+        CreateWavHeader(header, dataSize);
+        fix.write(header, headerSize);
+        fix.flush();
+        fix.close();
+    }
 
     teardown(false);
     Serial.println("Recording finished");
