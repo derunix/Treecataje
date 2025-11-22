@@ -1,6 +1,9 @@
 #include "audio.h"
 #include "AudioFileSourceFunction.h"
+#include "AudioFileSourceID3.h"
+#include "AudioFileSourceBuffer.h"
 #include "AudioGeneratorMIDI.h"
+#include "AudioGeneratorMP3.h"
 #include "AudioGeneratorWAV.h"
 #include "AudioGeneratorAAC.h"
 #include "AudioGeneratorFLAC.h"
@@ -37,8 +40,19 @@ static bool configureI2SPinout(AudioOutputI2S *output) {
 #if defined(HAS_NS4168_SPKR)
 static bool audioI2SActive = false;
 static const uint32_t DEFAULT_WAV_SR = 16000;
+static constexpr size_t AUDIO_FILE_BUFFER = 16 * 1024;
 
 namespace {
+bool hasValidWavHeader(FS *fs, const String &filepath) {
+    if (!fs) return false;
+    File f = fs->open(filepath, FILE_READ);
+    if (!f) return false;
+    uint8_t hdr[12] = {0};
+    int read = f.read(hdr, sizeof(hdr));
+    f.close();
+    return read == sizeof(hdr) && memcmp(hdr, "RIFF", 4) == 0 && memcmp(&hdr[8], "WAVE", 4) == 0;
+}
+
 void clearInputFlags() {
     NextPress = false;
     PrevPress = false;
@@ -52,12 +66,14 @@ void clearInputFlags() {
 }
 
 void drainInputNoise() {
-    const int cycles = 4;
+    // Aggressively clear latched key flags so UI controls keep working after audio ends.
+    const int cycles = 8;
     for (int i = 0; i < cycles; i++) {
         clearInputFlags();
-        vTaskDelay(20 / portTICK_PERIOD_MS);
+        vTaskDelay(25 / portTICK_PERIOD_MS);
     }
     clearInputFlags();
+    vTaskDelay(10 / portTICK_PERIOD_MS);
 }
 } // namespace
 
@@ -123,6 +139,9 @@ bool playAudioFile(FS *fs, String filepath, AudioProgressCb progressCb, size_t s
 
     AudioFileSource *source = new AudioFileSourceFS(*fs, filepath.c_str());
     if (!source) return false;
+    AudioFileSource *stream = source;
+    AudioFileSourceID3 *id3 = nullptr;
+    AudioFileSourceBuffer *buffer = nullptr;
 
     if (filepath.endsWith(".wav") && fs) {
         File chk = fs->open(filepath, FILE_READ);
@@ -131,7 +150,8 @@ bool playAudioFile(FS *fs, String filepath, AudioProgressCb progressCb, size_t s
             sz = chk.size();
             chk.close();
         }
-        if (sz >= 44) rewriteSimpleWavHeader(fs, filepath, DEFAULT_WAV_SR, sz);
+        // Only rewrite malformed recordings; leave valid WAV headers intact.
+        if (sz >= 44 && !hasValidWavHeader(fs, filepath)) { rewriteSimpleWavHeader(fs, filepath, DEFAULT_WAV_SR, sz); }
     }
 
     if (startPos > 0) source->seek(startPos, SEEK_SET);
@@ -145,6 +165,13 @@ bool playAudioFile(FS *fs, String filepath, AudioProgressCb progressCb, size_t s
 
     // set volume, derived from https://github.com/earlephilhower/ESP8266Audio/blob/master/examples/WebRadio/WebRadio.ino
     audioout->SetGain(((float)bruceConfig.soundVolume) / 100.0);
+    audioout->SetOutputModeMono(true);
+    if (!audioout->begin()) {
+        delete audioout;
+        delete source;
+        i2s_driver_uninstall(I2S_NUM_0);
+        return false;
+    } // ensure the I2S driver is ready before decoding
 
     AudioGenerator *generator = NULL;
 
@@ -159,8 +186,12 @@ bool playAudioFile(FS *fs, String filepath, AudioProgressCb progressCb, size_t s
     // OGG Vorbis is not supported https://github.com/earlephilhower/ESP8266Audio/issues/84
     if (filepath.endsWith(".mp3")) {
         generator = new AudioGeneratorMP3();
-        source = new AudioFileSourceID3(source);
+        id3 = new AudioFileSourceID3(stream);
+        stream = id3;
     }
+    buffer = new AudioFileSourceBuffer(stream, AUDIO_FILE_BUFFER);
+    AudioFileSource *activeSource = buffer ? static_cast<AudioFileSource *>(buffer) : stream;
+    if (startPos > 0 && activeSource) activeSource->seek(startPos, SEEK_SET);
     /* 2FIX: compilation issues
     if(filepath.endsWith(".mid"))  {
       // need to load a soundfont
@@ -172,17 +203,17 @@ bool playAudioFile(FS *fs, String filepath, AudioProgressCb progressCb, size_t s
       midi->SetSoundfont(sf2);
       generator = midi;
     } */
-    if (generator && source && audioout) {
+    if (generator && activeSource && audioout) {
         Serial.println("Start audio");
-        if (!generator->begin(source, audioout)) {
+        if (!generator->begin(activeSource, audioout)) {
             Serial.println("Audio begin failed");
             delete generator;
+            if (buffer) delete buffer;
+            if (id3) delete id3;
             delete source;
             delete audioout;
-            if (audioI2SActive) {
-                i2s_driver_uninstall(I2S_NUM_0);
-                audioI2SActive = false;
-            }
+            i2s_driver_uninstall(I2S_NUM_0);
+            audioI2SActive = false;
             return false;
         }
         audioI2SActive = true;
@@ -193,8 +224,8 @@ bool playAudioFile(FS *fs, String filepath, AudioProgressCb progressCb, size_t s
             if (progressCb) {
                 unsigned long now = millis();
                 if (now - lastCb > 100) {
-                    size_t pos = source->getPos();
-                    size_t size = source->getSize();
+                    size_t pos = activeSource->getPos();
+                    size_t size = activeSource->getSize();
                     if (!progressCb(pos, size, audioout)) {
                         generator->stop();
                         cbStopped = true;
@@ -207,10 +238,12 @@ bool playAudioFile(FS *fs, String filepath, AudioProgressCb progressCb, size_t s
             vTaskDelay(1);
         }
         audioout->stop();
-        source->close();
+        activeSource->close();
         Serial.println("Stop audio");
 
         delete generator;
+        if (buffer) delete buffer;
+        if (id3) delete id3;
         delete source;
         delete audioout;
         if (audioI2SActive) {
@@ -225,10 +258,12 @@ bool playAudioFile(FS *fs, String filepath, AudioProgressCb progressCb, size_t s
         return true;
     }
     // else
-    if (audioI2SActive) {
-        i2s_driver_uninstall(I2S_NUM_0);
-        audioI2SActive = false;
-    }
+    if (buffer) delete buffer;
+    if (id3) delete id3;
+    delete source;
+    delete audioout;
+    i2s_driver_uninstall(I2S_NUM_0);
+    audioI2SActive = false;
     drainInputNoise();
     return false; // init error
 }

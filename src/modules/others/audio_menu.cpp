@@ -141,19 +141,21 @@ static uint32_t getTrackDurationSec(AudioTrack &track) {
 static String formatTime(uint32_t seconds) {
     uint32_t m = seconds / 60;
     uint32_t s = seconds % 60;
-    char buf[8];
+    char buf[12];
     snprintf(buf, sizeof(buf), "%02u:%02u", (unsigned int)m, (unsigned int)s);
     return String(buf);
 }
 
 static void drawNowPlaying(const AudioTrack &track, int index, int total, const char *title) {
-    drawMainBorderWithTitle(title);
+    drawMainBorderWithTitle(title, true);
     printSubtitle("Now Playing", true);
-    padprintln(String("Track ") + (index + 1) + " of " + total);
+    padprintln(String("#") + (index + 1) + "/" + total + " " + track.label);
     padprintln(String("Source: ") + track.source);
-    padprintln(String("File:   ") + track.label);
-    padprintln("");
-    padprintln("Controls: Prev/Next, Sel=pause, Up/Down=vol, Esc=exit");
+    padprintln("Controls:");
+    padprintln(" Prev/Next - track");
+    padprintln(" Sel - pause/resume");
+    padprintln(" Up/Down - volume");
+    padprintln(" Esc - back");
     displayRedStripe("Playing...", TFT_WHITE, bruceConfig.priColor);
 }
 
@@ -257,6 +259,35 @@ static PlayOutcome playTrackWithControls(AudioTrack &track, int index, int total
     return outcome;
 }
 
+static PlayOutcome playTrackQueue(std::vector<AudioTrack> &tracks, int startIndex, const char *title) {
+    if (tracks.empty() || startIndex < 0 || startIndex >= (int)tracks.size()) return {};
+
+    int idx = startIndex;
+    PlayOutcome outcome;
+
+    while (idx >= 0 && idx < (int)tracks.size()) {
+        outcome = playTrackWithControls(tracks[idx], idx, tracks.size(), title);
+
+        if (outcome.res == PLAY_COMPLETED) {
+            if ((idx + 1) < (int)tracks.size()) {
+                idx++;
+                continue;
+            }
+            break;
+        }
+        if (outcome.res == PLAY_NEXT) {
+            idx = (idx + 1) % tracks.size();
+            continue;
+        }
+        if (outcome.res == PLAY_PREV) {
+            idx = (idx - 1 + tracks.size()) % tracks.size();
+            continue;
+        }
+        break; // exit, pause handled internally, or playback completed/failed
+    }
+    return outcome;
+}
+
 static void renderTrackMenu(
     const char *title, std::vector<AudioTrack> &tracks, const std::function<void()> &refreshFn, bool showRescan
 ) {
@@ -272,7 +303,10 @@ static void renderTrackMenu(
 
             options.push_back({itemLabel, [&, i, itemLabel, durationSec]() {
                                    std::vector<Option> sub;
-                                   sub.push_back({"Play", [&, i]() { playTrackWithControls(tracks[i], i, tracks.size(), title); }});
+                                   sub.push_back({"Play", [&, i]() {
+                                                     playTrackQueue(tracks, i, title);
+                                                     drawMainBorderWithTitle(title, true);
+                                                 }});
                                    sub.push_back({"Info", [&, i, durationSec]() {
                                                      uint32_t size = 0;
                                                      time_t ts = 0;
