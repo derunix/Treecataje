@@ -3,6 +3,8 @@
 #include "core/utils.h"
 #include "modules/NRF24/nrf_common.h"
 #include "modules/NRF24/nrf_jammer.h"
+#include "modules/NRF24/nrf_hijack.h"
+#include "modules/NRF24/nrf_sniffer.h"
 #include "modules/NRF24/nrf_spectrum.h"
 
 void NRF24Menu::optionsMenu() {
@@ -18,7 +20,8 @@ void NRF24Menu::optionsMenu() {
 #endif
     else options.push_back({"Spectrum", [=]() { nrf_spectrum(&SPI); }});
 
-    options.push_back({"NRF Jammer", nrf_jammer});
+    options.push_back({"NRF Toolkit", nrf_toolkit});
+    options.push_back({"NRF Jammer", nrf_jammer_pro});
 
     options.push_back({"CH Jammer", nrf_channel_jammer});
     options.push_back({"CH hopper", nrf_channel_hopper});

@@ -21,5 +21,6 @@ FLAFS:
 */
 
 void nrf_jammer();
+void nrf_jammer_pro();
 void nrf_channel_jammer();
 void nrf_channel_hopper();

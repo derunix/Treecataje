@@ -171,15 +171,53 @@ IRAM_ATTR void checkPosition() {
 void InputHandler(void) {
     static unsigned long tm = millis();  // debauce for buttons
     static unsigned long tm2 = millis(); // delay between Select and encoder (avoid missclick)
+    static bool selHeld = false;
+    static unsigned long selPressedAt = 0;
+#ifdef T_EMBED_1101
+    static bool escHeld = false;
+    static unsigned long escPressedAt = 0;
+#endif
     static int _last_dir = 0;
+    const unsigned long now = millis();
+
+    // Track raw press/release timing to log hold durations.
+    const bool selRawPressed = digitalRead(SEL_BTN) == BTN_ACT;
+#ifdef T_EMBED_1101
+    const bool escRawPressed = digitalRead(BK_BTN) == BTN_ACT;
+#endif
+
+    if (selRawPressed && !selHeld) {
+        selHeld = true;
+        selPressedAt = now;
+    } else if (!selRawPressed && selHeld) {
+        const unsigned long heldMs = now - selPressedAt;
+        Serial.printf("Select button held for %lums\n", static_cast<unsigned long>(heldMs));
+        selHeld = false;
+        if (heldMs > 0 && now - tm2 > 200) {
+            _last_dir = 0;
+            SelPress = true;
+            tm = now;
+        }
+    }
+
+#ifdef T_EMBED_1101
+    if (escRawPressed && !escHeld) {
+        escHeld = true;
+        escPressedAt = now;
+    } else if (!escRawPressed && escHeld) {
+        Serial.printf("Back button held for %lums\n", static_cast<unsigned long>(now - escPressedAt));
+        escHeld = false;
+    }
+#endif
+
     bool sel = !BTN_ACT;
     bool esc = !BTN_ACT;
     _last_dir = (int)encoder->getDirection();
 
-    if (millis() - tm > 200 || LongPress) {
-        sel = digitalRead(SEL_BTN);
+    if (now - tm > 200 || LongPress) {
+        sel = selRawPressed ? BTN_ACT : !BTN_ACT;
 #ifdef T_EMBED_1101
-        esc = digitalRead(BK_BTN);
+        esc = escRawPressed ? BTN_ACT : !BTN_ACT;
 #endif
     }
     if (_last_dir != 0 || sel == BTN_ACT || esc == BTN_ACT) {
@@ -200,19 +238,14 @@ void InputHandler(void) {
 #ifdef HAS_ENCODER_LED
         EncoderLedChange = 1;
 #endif
-        tm2 = millis();
+        tm2 = now;
     }
 
-    if (sel == BTN_ACT && millis() - tm2 > 200) {
-        _last_dir = 0;
-        SelPress = true;
-        tm = millis();
-    }
     if (esc == BTN_ACT) {
         AnyKeyPress = true;
         EscPress = true;
         Serial.println("EscPressed");
-        tm = millis();
+        tm = now;
     }
 }
 
