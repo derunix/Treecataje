@@ -1,141 +1,110 @@
-import os
-import glob
-import gzip
 import hashlib
-from typing import TYPE_CHECKING, Any, List
-from os import makedirs, remove
-from os.path import basename, dirname, exists, isfile, join
-
-try:
-    import requests  # optional when ALLOW_NET_MINIFY=1
-except Exception:  # pragma: no cover
-    requests = None  # type: ignore
+from typing import TYPE_CHECKING, Any
+import requests
 
 if TYPE_CHECKING:
     Import: Any = None
     env: Any = {}
 
-from SCons.Script import Import  # type: ignore
-Import("env")  # provided by PlatformIO
+import glob
+import gzip
+from os import makedirs, remove, rename
+from os.path import basename, dirname, exists, isfile, join
 
-FRAMEWORK_DIR = env.PioPlatform().get_package_dir("framework-arduinoespressif32")
+Import("env")  # type: ignore
+
+FRAMEWORK_DIR = env.PioPlatform().get_package_dir("framework-arduinoespressif32-libs")
 board_mcu = env.BoardConfig()
 mcu = board_mcu.get("build.mcu", "")
-patchflag_path = join(FRAMEWORK_DIR, "tools", "sdk", mcu, "lib", ".patched")
+patchflag_path = join(FRAMEWORK_DIR,mcu, "lib", ".patched")
 
-# ---- net80211 patch: guard and simplify ----
-def _patch_wifi_lib():
-    if isfile(patchflag_path):
-        return
-    libdir = join(FRAMEWORK_DIR, "tools", "sdk", mcu, "lib")
-    original_file = join(libdir, "libnet80211.a")
-    patched_file = join(libdir, "libnet80211.a.patched")
-    if not isfile(original_file):
-        print(f"[net80211] skip: missing {original_file}")
-        return
-    # Copy original -> patched
-    try:
-        with open(original_file, 'rb') as src, open(patched_file, 'wb') as dst:
-            dst.write(src.read())
-    except Exception as e:
-        print(f"[net80211] copy failed: {e}")
-        return
-    # Weaken a known sanity-check symbol; skip invalid 's' symbol from previous script
-    tool_pkg = f"toolchain-xtensa-{mcu}"
-    cmd = (
-        f"pio pkg exec -p {tool_pkg} -- xtensa-{mcu}-elf-objcopy "
-        f" --weaken-symbol=ieee80211_raw_frame_sanity_check {patched_file} {original_file}"
+# patch file only if we didn't do it befored
+if not isfile(join(FRAMEWORK_DIR,mcu, "lib", ".patched")):
+    original_file = join(FRAMEWORK_DIR,mcu, "lib", "libnet80211.a")
+    patched_file = join(
+        FRAMEWORK_DIR, mcu, "lib", "libnet80211.a.patched"
     )
-    try:
-        env.Execute(cmd)
-        # touch flag
-        with open(patchflag_path, "w") as fp:
+
+    if mcu=="esp32c5":
+        env.Execute(
+            "pio pkg exec -p toolchain-riscv32-esp -- riscv32-esp-elf-objcopy  --weaken-symbol=ieee80211_raw_frame_sanity_check %s %s"
+            % (original_file, patched_file)
+        )
+    else:
+        env.Execute(
+            "pio pkg exec -p toolchain-xtensa-%s -- xtensa-%s-elf-objcopy  --weaken-symbol=ieee80211_raw_frame_sanity_check %s %s"
+            % (mcu, mcu, original_file, patched_file)
+        )
+
+    if isfile("%s.old" % (original_file)):
+        remove("%s.old" % (original_file))
+    rename(original_file, "%s.old" % (original_file))
+    rename(patched_file, original_file)
+
+
+    def _touch(path):
+        with open(path, "w") as fp:
             fp.write("")
-        print("[net80211] patched successfully")
-    except Exception as e:
-        print(f"[net80211] patch failed: {e}")
 
-# ---- web assets gzip/embed with optional minify ----
-MINIFY_WEB = os.environ.get('BRUCE_MINIFY_WEB', '1') not in ('0', 'false', 'False')
-ALLOW_NET_MINIFY = os.environ.get('BRUCE_MINIFY_USE_NET', '0') in ('1', 'true', 'True') and requests is not None
+    env.Execute(lambda *args, **kwargs: _touch(patchflag_path))
 
-def hash_file(file_path: str) -> str:
-    h = hashlib.sha256()
-    with open(file_path, 'rb') as f:
-        for chunk in iter(lambda: f.read(4096), b''):
-            h.update(chunk)
-    return h.hexdigest()
 
-def hash_files(file_paths: List[str]) -> str:
-    h = hashlib.sha256()
-    for fp in file_paths:
-        h.update(hash_file(fp).encode('utf-8'))
-    return h.hexdigest()
+def hash_file(file_path):
+    """Generate SHA-256 hash for a single file."""
+    hasher = hashlib.sha256()
+    with open(file_path, "rb") as f:
+        # Read the file in chunks to avoid memory issues
+        for chunk in iter(lambda: f.read(4096), b""):
+            hasher.update(chunk)
+    return hasher.hexdigest()
 
-def save_checksum_file(hash_value: str, output_file: str) -> None:
-    with open(output_file, 'w') as f:
+
+def hash_files(file_paths):
+    """Generate a combined hash for multiple files."""
+    combined_hash = hashlib.sha256()
+
+    for file_path in file_paths:
+        file_hash = hash_file(file_path)
+        combined_hash.update(file_hash.encode("utf-8"))  # Update with the file's hash
+
+    return combined_hash.hexdigest()
+
+
+def save_checksum_file(hash_value, output_file):
+    """Save the hash value to a specified output file."""
+    with open(output_file, "w") as f:
         f.write(hash_value)
 
-def load_checksum_file(input_file: str) -> str:
-    with open(input_file, 'r') as f:
+
+def load_checksum_file(input_file):
+    """Load the hash value from a specified input file."""
+    with open(input_file, "r") as f:
         return f.readline().strip()
 
-def _offline_minify(data: bytes, kind: str) -> bytes:
-    try:
-        txt = data.decode('utf-8', errors='ignore')
-        import re
-        if kind == 'css':
-            txt = re.sub(r'/\*.*?\*/', '', txt, flags=re.S)
-            txt = re.sub(r'\s+', ' ', txt)
-        elif kind == 'js':
-            txt = re.sub(r'/\*.*?\*/', '', txt, flags=re.S)
-            txt = re.sub(r'//.*', '', txt)
-            txt = re.sub(r'\s+', ' ', txt)
-        elif kind == 'html':
-            txt = re.sub(r'<!--.*?-->', '', txt, flags=re.S)
-            txt = re.sub(r'>\s+<', '><', txt)
-        return txt.encode('utf-8')
-    except Exception:
-        return data
 
 def minify_css(c):
-    data = c.read()
-    if not MINIFY_WEB:
-        return data
-    if ALLOW_NET_MINIFY:
-        try:
-            r = requests.post("https://www.toptal.com/developers/cssminifier/api/raw", {"input": data.decode('utf-8','ignore')}, timeout=5)
-            if r.ok:
-                return r.text.encode('utf-8')
-        except Exception:
-            pass
-    return _offline_minify(data, 'css')
+    minify_req = requests.post(
+        "https://www.toptal.com/developers/cssminifier/api/raw",
+        {"input": c.read().decode('utf-8')},
+    )
+    return c if minify_req is False else minify_req.text.encode('utf-8')
+
 
 def minify_js(js):
-    data = js.read()
-    if not MINIFY_WEB:
-        return data
-    if ALLOW_NET_MINIFY:
-        try:
-            r = requests.post("https://www.toptal.com/developers/javascript-minifier/api/raw", {"input": data.decode('utf-8','ignore')}, timeout=5)
-            if r.ok:
-                return r.text.encode('utf-8')
-        except Exception:
-            pass
-    return _offline_minify(data, 'js')
+    minify_req = requests.post(
+        'https://www.toptal.com/developers/javascript-minifier/api/raw',
+        {'input': js.read().decode('utf-8')},
+    )
+    return js if minify_req is False else minify_req.text.encode('utf-8')
+
 
 def minify_html(html):
-    data = html.read()
-    if not MINIFY_WEB:
-        return data
-    if ALLOW_NET_MINIFY:
-        try:
-            r = requests.post("https://www.toptal.com/developers/html-minifier/api/raw", {"input": data.decode('utf-8','ignore')}, timeout=5)
-            if r.ok:
-                return r.text.encode('utf-8')
-        except Exception:
-            pass
-    return _offline_minify(data, 'html')
+    minify_req = requests.post(
+        'https://www.toptal.com/developers/html-minifier/api/raw',
+        {'input': html.read().decode('utf-8')},
+    )
+    return html if minify_req is False else minify_req.text.encode('utf-8')
+
 
 # gzip web files
 def prepare_www_files():
@@ -152,7 +121,7 @@ def prepare_www_files():
     if exists(checksum_file):
         checksum = load_checksum_file(checksum_file)
 
-    files_to_gzip: List[str] = []
+    files_to_gzip = []
     for extension in filetypes_to_gzip:
         files_to_gzip.extend(glob.glob(join(data_src_dir, "*." + extension)))
 
@@ -166,8 +135,12 @@ def prepare_www_files():
     makedirs(dirname(HEADER_FILE), exist_ok=True)
 
     with open(HEADER_FILE, "w") as header:
-        header.write("#ifndef WEB_FILES_H\n#define WEB_FILES_H\n\n#include <Arduino.h>\n\n")
-        header.write("// THIS FILE IS AUTOGENERATED DO NOT MODIFY IT. MODIFY FILES IN /embedded_resources/web_interface\n\n")
+        header.write(
+            "#ifndef WEB_FILES_H\n#define WEB_FILES_H\n\n#include <Arduino.h>\n\n"
+        )
+        header.write(
+            "// THIS FILE IS AUTOGENERATED DO NOT MODIFY IT. MODIFY FILES IN /embedded_resources/web_interface\n\n"
+        )
 
         for file in files_to_gzip:
             gz_file = file + ".gz"
@@ -181,6 +154,12 @@ def prepare_www_files():
                     minified = minify_js(src)
                 else:
                     raise ValueError(f"Unsupported file type: {ext}")
+
+                # # Output minified file
+                # min_file = file + ".min"
+                # with open(min_file, "wb") as minf:
+                #     minf.write(minified)
+
                 dst.write(minified)
 
             with open(gz_file, "rb") as gz:
@@ -188,19 +167,26 @@ def prepare_www_files():
                 var_name = basename(file).replace(".", "_")
 
                 header.write(f"const uint8_t {var_name}[] PROGMEM = {{\n")
-                for i in range(0, len(compressed_data), 15):
-                    hex_chunk = ", ".join(f"0x{byte:02X}" for byte in compressed_data[i:i+15])
-                    header.write(f"  {hex_chunk},\n")
-                header.write("};\n\n")
-                header.write(f"const uint32_t {var_name}_size = {len(compressed_data)};\n\n")
 
-            remove(gz_file)
+                # Write hex values, inserting a newline every 15 bytes
+                for i in range(0, len(compressed_data), 15):
+                    hex_chunk = ", ".join(
+                        f"0x{byte:02X}" for byte in compressed_data[i : i + 15]
+                    )
+                    header.write(f"  {hex_chunk},\n")
+
+                header.write("};\n\n")
+                header.write(
+                    f"const uint32_t {var_name}_size = {len(compressed_data)};\n\n"
+                )
+
+            remove(gz_file)  # Clean up temporary gzip file
 
         header.write("#endif // WEB_FILES_H\n")
 
     save_checksum_file(files_checksum, checksum_file)
+
     print(f"[DONE] Gzipped files embedded into {HEADER_FILE}")
 
-# Execute steps
-_patch_wifi_lib()
+
 prepare_www_files()

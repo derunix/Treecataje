@@ -39,6 +39,7 @@ private:
     gps_fix_t fix = {};
     std::set<String> registeredMACs;              // Store and track registered MAC
     int wifiNetworkCount = 0;                     // Counter fo wifi networks
+    bool rxPinReleased = false;
 
     /////////////////////////////////////////////////////////////////////////////////////
     // Setup
@@ -46,6 +47,8 @@ private:
     void begin_wifi(void);
     bool begin_gps(void);
     void end(void);
+    void releasePins(void);
+    void restorePins(void);
 
     /////////////////////////////////////////////////////////////////////////////////////
     // Display functions

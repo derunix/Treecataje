@@ -11,8 +11,6 @@
 #include "core/mykeyboard.h"
 #include "core/sd_functions.h"
 #include "current_year.h"
-#include <TinyGPS++.h>
-#include "gps_provider.h"
 
 #define MAX_WAIT 5000
 
@@ -41,25 +39,33 @@ void GPSTracker::setup() {
 }
 
 bool GPSTracker::begin_gps() {
-    gps_provider_begin();
+    releasePins();
+    GPSserial.begin(
+        bruceConfigPins.gpsBaudrate, SERIAL_8N1, bruceConfigPins.gps_bus.rx, bruceConfigPins.gps_bus.tx
+    );
+
     int count = 0;
     padprintln("Waiting for GPS data");
-    while (!gps_provider_seen_bytes(false)) {
+    while (GPSserial.available() <= 0) {
         if (check(EscPress)) {
             end();
             return false;
         }
         displayTextLine("Waiting GPS: " + String(count) + "s");
         count++;
-        gps_provider_tick();
         vTaskDelay(1000 / portTICK_PERIOD_MS);
     }
+
+    gpsConnected = true;
     return true;
 }
 
 void GPSTracker::end() {
-    gps_provider_end();
+    GPSserial.end();
+    restorePins();
+
     returnToMenu = true;
+    gpsConnected = false;
 }
 
 void GPSTracker::loop() {
@@ -70,42 +76,42 @@ void GPSTracker::loop() {
 
         if (check(EscPress) || returnToMenu) return end();
 
-        gps_provider_tick();
-        if (gps_provider_fix_updated(true)) {
-            fix = gps_provider_get_fix();
-            if (fix.fix_valid) {
+        if (GPSserial.available() > 0) {
+            count = 0;
+            while (GPSserial.available() > 0) gps.encode(GPSserial.read());
+
+            if (gps.location.isUpdated()) {
                 padprintln("GPS location updated");
                 set_position();
                 add_coord();
             } else {
-                padprintln("GPS data invalid");
+                padprintln("GPS location not updated");
                 dump_gps_data();
+
+                if (filename == "" && gps.date.year() >= CURRENT_YEAR && gps.date.year() < CURRENT_YEAR + 5)
+                    create_filename();
             }
         } else {
-            if (count > 5 && !gps_provider_seen_bytes(false)) {
+            if (count > 5) {
                 displayError("GPS not Found!");
                 return end();
             }
-            padprintln("GPS location not updated");
-            dump_gps_data();
-
-            if (filename == "" && fix.year >= CURRENT_YEAR && fix.year < CURRENT_YEAR + 5) create_filename();
+            padprintln("No GPS data available");
             count++;
         }
 
         int tmp = millis();
-        while (millis() - tmp < MAX_WAIT && !gps_provider_fix_updated(false)) {
-            gps_provider_tick();
+        while (millis() - tmp < MAX_WAIT && !gps.location.isUpdated()) {
             if (check(EscPress) || returnToMenu) return end();
         }
     }
 }
 
 void GPSTracker::set_position() {
-    double lat = fix.lat_deg;
-    double lng = fix.lon_deg;
+    double lat = gps.location.lat();
+    double lng = gps.location.lng();
 
-    if (initial_position_set) distance += TinyGPSPlus::distanceBetween(cur_lat, cur_lng, lat, lng);
+    if (initial_position_set) distance += gps.distanceBetween(cur_lat, cur_lng, lat, lng);
     else initial_position_set = true;
 
     cur_lat = lat;
@@ -126,15 +132,15 @@ void GPSTracker::display_banner() {
 }
 
 void GPSTracker::dump_gps_data() {
-    if (!date_time_updated && fix.year == 0) {
+    if (!date_time_updated && (!gps.date.isUpdated() || !gps.time.isUpdated())) {
         padprintln("Waiting for valid GPS data");
         return;
     }
     date_time_updated = true;
-    padprintf(2, "Date: %02d-%02d-%02d\n", fix.year, fix.month, fix.day);
-    padprintf(2, "Time: %02d:%02d:%02d\n", fix.hour, fix.min, fix.sec);
-    padprintf(2, "Sat:  %d\n", fix.sats_used);
-    padprintf(2, "HDOP: %.2f\n", fix.hdop);
+    padprintf(2, "Date: %02d-%02d-%02d\n", gps.date.year(), gps.date.month(), gps.date.day());
+    padprintf(2, "Time: %02d:%02d:%02d\n", gps.time.hour(), gps.time.minute(), gps.time.second());
+    padprintf(2, "Sat:  %d\n", gps.satellites.value());
+    padprintf(2, "HDOP: %.2f\n", gps.hdop.hdop());
 }
 
 void GPSTracker::create_filename() {
@@ -142,12 +148,12 @@ void GPSTracker::create_filename() {
     sprintf(
         timestamp,
         "%02d%02d%02d_%02d%02d%02d",
-        fix.year % 100,
-        fix.month % 100,
-        fix.day % 100,
-        fix.hour % 100,
-        fix.min % 100,
-        fix.sec % 100
+        gps.date.year() % 100,
+        gps.date.month() % 100,
+        gps.date.day() % 100,
+        gps.time.hour() % 100,
+        gps.time.minute() % 100,
+        gps.time.second() % 100
     );
     filename = String(timestamp) + "_gps_tracker.gpx";
 }
@@ -216,16 +222,63 @@ void GPSTracker::add_coord() {
 
     if (is_new_file) add_initial_file_data(file);
 
-    file.printf("      <trkpt lat=\"%f\" lon=\"%f\">\n", fix.lat_deg, fix.lon_deg);
+    file.printf("      <trkpt lat=\"%f\" lon=\"%f\">\n", gps.location.lat(), gps.location.lng());
     file.println("        <sym>Waypoint</sym>");
-    file.printf("        <ele>%f</ele>\n", fix.alt_m);
-    file.printf("        <hdop>%f</hdop>\n", fix.hdop);
-    file.printf("        <sat>%d</sat>\n", fix.sats_used);
+    file.printf("        <ele>%f</ele>\n", gps.altitude.meters());
+    file.printf("        <hdop>%f</hdop>\n", gps.hdop.hdop());
+    file.printf("        <sat>%ld</sat>\n", gps.satellites.value());
     file.println("      </trkpt>");
 
     gpsCoordCount++;
 
     file.close();
 
-    padprintf(2, "Coord: %.6f, %.6f\n", fix.lat_deg, fix.lon_deg);
+    padprintf(2, "Coord: %.6f, %.6f\n", gps.location.lat(), gps.location.lng());
+}
+
+void GPSTracker::releasePins() {
+    rxPinReleased = false;
+    if (bruceConfigPins.CC1101_bus.checkConflict(bruceConfigPins.gps_bus.rx) ||
+        bruceConfigPins.NRF24_bus.checkConflict(bruceConfigPins.gps_bus.rx) ||
+#if !defined(LITE_VERSION)
+        bruceConfigPins.W5500_bus.checkConflict(bruceConfigPins.gps_bus.rx) ||
+        bruceConfigPins.LoRa_bus.checkConflict(bruceConfigPins.gps_bus.rx) ||
+#endif
+        bruceConfigPins.SDCARD_bus.checkConflict(bruceConfigPins.gps_bus.rx)) {
+        // T-Embed CC1101 and T-Display S3 Touch ties this pin to the NRF24 CS; switch it to input so the GPS
+        // UART can drive it.
+        pinMode(bruceConfigPins.gps_bus.rx, INPUT);
+        rxPinReleased = true;
+    }
+}
+
+void GPSTracker::restorePins() {
+    if (rxPinReleased) {
+        if (bruceConfigPins.CC1101_bus.checkConflict(bruceConfigPins.gps_bus.rx) ||
+            bruceConfigPins.NRF24_bus.checkConflict(bruceConfigPins.gps_bus.rx) ||
+#if !defined(LITE_VERSION)
+            bruceConfigPins.W5500_bus.checkConflict(bruceConfigPins.gps_bus.rx) ||
+            bruceConfigPins.LoRa_bus.checkConflict(bruceConfigPins.gps_bus.rx) ||
+#endif
+            bruceConfigPins.SDCARD_bus.checkConflict(bruceConfigPins.gps_bus.rx)) {
+            // Restore the original board state after leaving the GPS app s
+            // o the radio/other peripherals behave as expected
+            pinMode(bruceConfigPins.gps_bus.rx, OUTPUT);
+            if (bruceConfigPins.gps_bus.rx == bruceConfigPins.CC1101_bus.cs ||
+                bruceConfigPins.gps_bus.rx == bruceConfigPins.NRF24_bus.cs ||
+#if !defined(LITE_VERSION)
+                bruceConfigPins.gps_bus.rx == bruceConfigPins.W5500_bus.cs ||
+                bruceConfigPins.gps_bus.rx == bruceConfigPins.W5500_bus.cs ||
+#endif
+                bruceConfigPins.gps_bus.rx == bruceConfigPins.SDCARD_bus.cs) {
+                // If it is conflicting to an SPI CS pin, keep it HIGH
+                digitalWrite(bruceConfigPins.gps_bus.rx, HIGH);
+            } else {
+                // If it is conflicting with any other SPI pin, keep it LOW
+                // Avoids CC1101 Jamming and nRF24 radio to keep enabled
+                digitalWrite(bruceConfigPins.gps_bus.rx, LOW);
+            }
+        }
+        rxPinReleased = false;
+    }
 }

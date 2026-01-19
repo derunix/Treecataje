@@ -12,16 +12,13 @@
 #include "menu_items/FileMenu.h"
 #include "menu_items/GpsMenu.h"
 #include "menu_items/IRMenu.h"
+#include "menu_items/LoRaMenu.h"
 #include "menu_items/NRF24.h"
-#include "menu_items/RadioMenu.h"
-#include "menu_items/PowerMenu.h"
 #include "menu_items/OthersMenu.h"
 #include "menu_items/RFIDMenu.h"
 #include "menu_items/RFMenu.h"
 #include "menu_items/ScriptsMenu.h"
 #include "menu_items/WifiMenu.h"
-#include "menu_items/AudioMenu.h"
-
 class MainMenu {
 public:
     FileMenu fileMenu;
@@ -29,10 +26,7 @@ public:
     ClockMenu clockMenu;
     ConnectMenu connectMenu;
     ConfigMenu configMenu;
-    PowerMenu powerMenu;
     FMMenu fmMenu;
-    RadioMenu radioMenu;
-    AudioMenu audioMenu;
     GpsMenu gpsMenu;
     IRMenu irMenu;
     NRF24Menu nrf24Menu;
@@ -42,6 +36,7 @@ public:
     ScriptsMenu scriptsMenu;
     WifiMenu wifiMenu;
 #if !defined(LITE_VERSION)
+    LoRaMenu loraMenu;
     EthernetMenu ethernetMenu;
 #endif
 

@@ -12,7 +12,6 @@
 #include "core/sd_functions.h"
 #include "core/wifi/wifi_common.h"
 #include "current_year.h"
-#include <TinyGPS++.h>
 
 #define MAX_WAIT 5000
 
@@ -47,28 +46,34 @@ void Wardriving::begin_wifi() {
 }
 
 bool Wardriving::begin_gps() {
-    gps_provider_begin();
+    releasePins();
+    GPSserial.begin(
+        bruceConfigPins.gpsBaudrate, SERIAL_8N1, bruceConfigPins.gps_bus.rx, bruceConfigPins.gps_bus.tx
+    );
+
     int count = 0;
     padprintln("Waiting for GPS data");
-    while (!gps_provider_seen_bytes(false)) {
+    while (GPSserial.available() <= 0) {
         if (check(EscPress)) {
             end();
             return false;
         }
         displayTextLine("Waiting GPS: " + String(count) + "s");
         count++;
-        gps_provider_tick();
         vTaskDelay(1000 / portTICK_PERIOD_MS);
     }
+
+    gpsConnected = true;
     return true;
 }
 
 void Wardriving::end() {
     wifiDisconnect();
 
-    gps_provider_end();
-
+    GPSserial.end();
+    restorePins();
     returnToMenu = true;
+    gpsConnected = false;
 }
 
 void Wardriving::loop() {
@@ -79,43 +84,42 @@ void Wardriving::loop() {
 
         if (check(EscPress) || returnToMenu) return end();
 
-        gps_provider_tick();
+        if (GPSserial.available() > 0) {
+            count = 0;
+            while (GPSserial.available() > 0) gps.encode(GPSserial.read());
 
-        if (gps_provider_fix_updated(true)) {
-            fix = gps_provider_get_fix();
-            if (fix.fix_valid) {
+            if (gps.location.isUpdated()) {
                 padprintln("GPS location updated");
                 set_position();
                 scan_networks();
             } else {
-                padprintln("GPS data invalid");
+                padprintln("GPS location not updated");
                 dump_gps_data();
+
+                if (filename == "" && gps.date.year() >= CURRENT_YEAR && gps.date.year() < CURRENT_YEAR + 5)
+                    create_filename();
             }
         } else {
-            if (count > 5 && !gps_provider_seen_bytes(false)) {
+            if (count > 5) {
                 displayError("GPS not Found!");
                 return end();
             }
-            padprintln("GPS location not updated");
-            dump_gps_data();
-
-            if (filename == "" && fix.year >= CURRENT_YEAR && fix.year < CURRENT_YEAR + 5) create_filename();
+            padprintln("No GPS data available");
             count++;
         }
 
         int tmp = millis();
-        while (millis() - tmp < MAX_WAIT && !gps_provider_fix_updated(false)) {
-            gps_provider_tick();
+        while (millis() - tmp < MAX_WAIT && !gps.location.isUpdated()) {
             if (check(EscPress) || returnToMenu) return end();
         }
     }
 }
 
 void Wardriving::set_position() {
-    double lat = fix.lat_deg;
-    double lng = fix.lon_deg;
+    double lat = gps.location.lat();
+    double lng = gps.location.lng();
 
-    if (initial_position_set) distance += TinyGPSPlus::distanceBetween(cur_lat, cur_lng, lat, lng);
+    if (initial_position_set) distance += gps.distanceBetween(cur_lat, cur_lng, lat, lng);
     else initial_position_set = true;
 
     cur_lat = lat;
@@ -136,15 +140,15 @@ void Wardriving::display_banner() {
 }
 
 void Wardriving::dump_gps_data() {
-    if (!date_time_updated && fix.year == 0) {
+    if (!date_time_updated && (!gps.date.isUpdated() || !gps.time.isUpdated())) {
         padprintln("Waiting for valid GPS data");
         return;
     }
     date_time_updated = true;
-    padprintf(2, "Date: %02d-%02d-%02d\n", fix.year, fix.month, fix.day);
-    padprintf(2, "Time: %02d:%02d:%02d\n", fix.hour, fix.min, fix.sec);
-    padprintf(2, "Sat:  %d\n", fix.sats_used);
-    padprintf(2, "HDOP: %.2f\n", fix.hdop);
+    padprintf(2, "Date: %02d-%02d-%02d\n", gps.date.year(), gps.date.month(), gps.date.day());
+    padprintf(2, "Time: %02d:%02d:%02d\n", gps.time.hour(), gps.time.minute(), gps.time.second());
+    padprintf(2, "Sat:  %d\n", gps.satellites.value());
+    padprintf(2, "HDOP: %.2f\n", gps.hdop.hdop());
 }
 
 String Wardriving::auth_mode_to_string(wifi_auth_mode_t authMode) {
@@ -171,7 +175,7 @@ void Wardriving::scan_networks() {
         return;
     }
 
-    padprintf(2, "Coord: %.6f, %.6f\n", fix.lat_deg, fix.lon_deg);
+    padprintf(2, "Coord: %.6f, %.6f\n", gps.location.lat(), gps.location.lng());
     padprintln("Networks Found: " + String(network_amount), 2);
 
     return append_to_file(network_amount);
@@ -182,12 +186,12 @@ void Wardriving::create_filename() {
     sprintf(
         timestamp,
         "%02d%02d%02d_%02d%02d%02d",
-        fix.year % 100,
-        fix.month % 100,
-        fix.day % 100,
-        fix.hour % 100,
-        fix.min % 100,
-        fix.sec % 100
+        gps.date.year() % 100,
+        gps.date.month() % 100,
+        gps.date.day() % 100,
+        gps.time.hour() % 100,
+        gps.time.minute() % 100,
+        gps.time.second() % 100
     );
     filename = String(timestamp) + "_wardriving.csv";
 }
@@ -238,23 +242,23 @@ void Wardriving::append_to_file(int network_amount) {
             snprintf(
                 buffer,
                 sizeof(buffer),
-                "%s,\"%s\",[%s],%04d-%02d-%02d %02d:%02d:%02d,%d,%d,%d,%f,%f,%f,%f,,,WIFI\n",
+                "%s,\"%s\",[%s],%04d-%02d-%02d %02d:%02d:%02d,%ld,%ld,%ld,%f,%f,%f,%f,,,WIFI\n",
                 macAddress.c_str(),
                 WiFi.SSID(i).c_str(),
                 auth_mode_to_string(WiFi.encryptionType(i)).c_str(),
-                fix.year,
-                fix.month,
-                fix.day,
-                fix.hour,
-                fix.min,
-                fix.sec,
+                gps.date.year(),
+                gps.date.month(),
+                gps.date.day(),
+                gps.time.hour(),
+                gps.time.minute(),
+                gps.time.second(),
                 channel,
                 channel != 14 ? 2407 + (channel * 5) : 2484,
                 WiFi.RSSI(i),
-                fix.lat_deg,
-                fix.lon_deg,
-                fix.alt_m,
-                fix.hdop * 1.0
+                gps.location.lat(),
+                gps.location.lng(),
+                gps.altitude.meters(),
+                gps.hdop.hdop() * 1.0
             );
             file.print(buffer);
 
@@ -263,4 +267,51 @@ void Wardriving::append_to_file(int network_amount) {
     }
 
     file.close();
+}
+
+void Wardriving::releasePins() {
+    rxPinReleased = false;
+    if (bruceConfigPins.CC1101_bus.checkConflict(bruceConfigPins.gps_bus.rx) ||
+        bruceConfigPins.NRF24_bus.checkConflict(bruceConfigPins.gps_bus.rx) ||
+#if !defined(LITE_VERSION)
+        bruceConfigPins.W5500_bus.checkConflict(bruceConfigPins.gps_bus.rx) ||
+        bruceConfigPins.LoRa_bus.checkConflict(bruceConfigPins.gps_bus.rx) ||
+#endif
+        bruceConfigPins.SDCARD_bus.checkConflict(bruceConfigPins.gps_bus.rx)) {
+        // T-Embed CC1101 and T-Display S3 Touch ties this pin to the NRF24 CS;
+        // switch it to input so the GPS UART can drive it.
+        pinMode(bruceConfigPins.gps_bus.rx, INPUT);
+        rxPinReleased = true;
+    }
+}
+
+void Wardriving::restorePins() {
+    if (rxPinReleased) {
+        if (bruceConfigPins.CC1101_bus.checkConflict(bruceConfigPins.gps_bus.rx) ||
+            bruceConfigPins.NRF24_bus.checkConflict(bruceConfigPins.gps_bus.rx) ||
+#if !defined(LITE_VERSION)
+            bruceConfigPins.W5500_bus.checkConflict(bruceConfigPins.gps_bus.rx) ||
+            bruceConfigPins.LoRa_bus.checkConflict(bruceConfigPins.gps_bus.rx) ||
+#endif
+            bruceConfigPins.SDCARD_bus.checkConflict(bruceConfigPins.gps_bus.rx)) {
+            // Restore the original board state after leaving the GPS app s
+            // o the radio/other peripherals behave as expected
+            pinMode(bruceConfigPins.gps_bus.rx, OUTPUT);
+            if (bruceConfigPins.gps_bus.rx == bruceConfigPins.CC1101_bus.cs ||
+                bruceConfigPins.gps_bus.rx == bruceConfigPins.NRF24_bus.cs ||
+#if !defined(LITE_VERSION)
+                bruceConfigPins.gps_bus.rx == bruceConfigPins.W5500_bus.cs ||
+                bruceConfigPins.gps_bus.rx == bruceConfigPins.W5500_bus.cs ||
+#endif
+                bruceConfigPins.gps_bus.rx == bruceConfigPins.SDCARD_bus.cs) {
+                // If it is conflicting to an SPI CS pin, keep it HIGH
+                digitalWrite(bruceConfigPins.gps_bus.rx, HIGH);
+            } else {
+                // If it is conflicting with any other SPI pin, keep it LOW
+                // Avoids CC1101 Jamming and nRF24 radio to keep enabled
+                digitalWrite(bruceConfigPins.gps_bus.rx, LOW);
+            }
+        }
+        rxPinReleased = false;
+    }
 }

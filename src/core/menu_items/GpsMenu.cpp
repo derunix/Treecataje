@@ -2,34 +2,27 @@
 #include "core/display.h"
 #include "core/settings.h"
 #include "core/utils.h"
-#include "modules/gps/gps_casic_ui.h"
 #include "modules/gps/gps_tracker.h"
 #include "modules/gps/wardriving.h"
 #include <math.h>
 
 void GpsMenu::optionsMenu() {
     options = {
-        {"Wardriving",          [=]() { Wardriving(); }},
-        {"GPS Tracker",         [=]() { GPSTracker(); }},
-        {"Satellites (CASIC)",  [=]() { GPSCasicSatView(); }},
-        {"Receiver Info",       [=]() { GPSCasicInfoScreen(); }},
-        {"CASIC Config",        [=]() { GPSCasicConfigMenu(); }},
-        {"Config",              [=]() { configMenu(); }},
+        {"Wardriving",  [=]() { Wardriving(); }   },
+        {"GPS Tracker", [=]() { GPSTracker(); }   },
+        {"Config",      [this]() { configMenu(); }},
     };
     addOptionToMainMenu();
 
-    String txt = "GPS (" + String(bruceConfig.gpsBaudrate) + " bps, " +
-                 (bruceConfig.gpsSource == BruceConfig::GPS_SOURCE_CASIC ? "CASIC" : "Internal") + ")";
+    String txt = "GPS (" + String(bruceConfigPins.gpsBaudrate) + " bps)";
     loopOptions(options, MENU_TYPE_SUBMENU, txt.c_str());
 }
 
 void GpsMenu::configMenu() {
     options = {
-        {"Source",    setGpsSourceMenu                                  },
-        {"Baudrate",  setGpsBaudrateMenu                                },
-        {"Update Hz", setGpsUpdateRateMenu                              },
-        {"GPS Pins",  [=]() { setUARTPinsMenu(bruceConfigPins.gps_bus); }},
-        {"Back",      [=]() { optionsMenu(); }                          },
+        {"Baudrate", setGpsBaudrateMenu                                 },
+        {"GPS Pins", [=]() { setUARTPinsMenu(bruceConfigPins.gps_bus); }},
+        {"Back",     [this]() { optionsMenu(); }                        },
     };
 
     loopOptions(options, MENU_TYPE_SUBMENU, "GPS Config");

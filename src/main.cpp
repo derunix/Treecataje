@@ -1,15 +1,12 @@
 #include "core/main_menu.h"
 #include <globals.h>
-#include <esp_log.h>
 
-#include "core/batteryLogger.h"
 #include "core/powerSave.h"
-#include "core/systemStatus.h"
 #include "core/serial_commands/cli.h"
-#include "core/emergencyReboot.h"
 #include "core/utils.h"
 #include "esp32-hal-psram.h"
 #include "esp_task_wdt.h"
+#include "esp_wifi.h"
 #include <functional>
 #include <string>
 #include <vector>
@@ -18,6 +15,8 @@ BruceConfig bruceConfig;
 BruceConfigPins bruceConfigPins;
 
 SerialCli serialCli;
+USBSerial USBserial;
+SerialDevice *serialDevice = &USBserial;
 
 StartupApp startupApp;
 MainMenu mainMenu;
@@ -54,15 +53,12 @@ keyStroke KeyStroke;
 TaskHandle_t xHandle;
 void __attribute__((weak)) taskInputHandler(void *parameter) {
     auto timer = millis();
-    bool backPressLatched = false;
     while (true) {
         checkPowerSaveTime();
-        BatteryLogger::update();
-        SystemStatus::update();
         // Sometimes this task run 2 or more times before looptask,
         // and navigation gets stuck, the idea here is run the input detection
         // if AnyKeyPress is false, or rerun if it was not renewed within 75ms (arbitrary)
-        // because AnyKeyPress will be true if didn?t passed through a check(bool var)
+        // because AnyKeyPress will be true if didn´t passed through a check(bool var)
         if (!AnyKeyPress || millis() - timer > 75) {
             NextPress = false;
             PrevPress = false;
@@ -76,11 +72,11 @@ void __attribute__((weak)) taskInputHandler(void *parameter) {
             PrevPagePress = false;
             touchPoint.pressed = false;
             touchPoint.Clear();
+#ifndef USE_TFT_eSPI_TOUCH
             InputHandler();
-            backPressLatched = EscPress || KeyStroke.exit_key || KeyStroke.del;
+#endif
             timer = millis();
         }
-        EmergencyReboot::update(backPressLatched);
         vTaskDelay(pdMS_TO_TICKS(10));
     }
 }
@@ -89,7 +85,6 @@ unsigned long previousMillis = millis();
 int prog_handler; // 0 - Flash, 1 - LittleFS, 3 - Download
 String cachedPassword = "";
 bool interpreter_start = false;
-bool littleFsMounted = false;
 bool sdcardMounted = false;
 bool gpsConnected = false;
 
@@ -144,6 +139,7 @@ volatile int tftHeight = VECTOR_DISPLAY_DEFAULT_WIDTH;
 #include "core/sd_functions.h"
 #include "core/serialcmds.h"
 #include "core/settings.h"
+#include "core/wifi/webInterface.h"
 #include "core/wifi/wifi_common.h"
 #include "modules/bjs_interpreter/interpreter.h" // for JavaScript interpreter
 #include "modules/others/audio.h"                // for playAudioFile
@@ -154,43 +150,11 @@ volatile int tftHeight = VECTOR_DISPLAY_DEFAULT_WIDTH;
  **  Function: begin_storage
  **  Config LittleFS and SD storage
  *********************************************************************/
-enum StorageInitResult : uint8_t {
-    STORAGE_INIT_OK = 0,
-    STORAGE_INIT_LFS_MOUNT_FAILED = 1 << 0,
-    STORAGE_INIT_LFS_FORMAT_BLOCKED = 1 << 1,
-    STORAGE_INIT_LFS_FORMAT_FAILED = 1 << 2,
-    STORAGE_INIT_SD_FAILED = 1 << 3,
-};
-
-StorageInitResult begin_storage(bool allowLittleFsFormat = false) {
-    StorageInitResult status = STORAGE_INIT_OK;
-    littleFsMounted = LittleFS.begin(false);
-    if (!littleFsMounted) {
-        log_e("LittleFS mount failed");
-        bool formatAttempted = false;
-        if (allowLittleFsFormat) {
-            formatAttempted = true;
-            log_w("Attempting LittleFS.format() after mount failure");
-            if (LittleFS.format()) littleFsMounted = LittleFS.begin(false);
-            else status = static_cast<StorageInitResult>(status | STORAGE_INIT_LFS_FORMAT_FAILED);
-        } else {
-            status = static_cast<StorageInitResult>(status | STORAGE_INIT_LFS_FORMAT_BLOCKED);
-        }
-        if (!littleFsMounted) {
-            status = static_cast<StorageInitResult>(status | STORAGE_INIT_LFS_MOUNT_FAILED);
-            if (formatAttempted) status = static_cast<StorageInitResult>(status | STORAGE_INIT_LFS_FORMAT_FAILED);
-        }
-    } else log_i("LittleFS mounted successfully");
-
-    const bool sdMounted = setupSdCard();
-    if (!sdMounted) status = static_cast<StorageInitResult>(status | STORAGE_INIT_SD_FAILED);
-
-    if (littleFsMounted) {
-        bruceConfig.fromFile(sdMounted);
-        bruceConfigPins.fromFile(sdMounted);
-    }
-
-    return status;
+void begin_storage() {
+    if (!LittleFS.begin(true)) { LittleFS.format(), LittleFS.begin(); }
+    bool checkFS = setupSdCard();
+    bruceConfig.fromFile(checkFS);
+    bruceConfigPins.fromFile(checkFS);
 }
 
 /*********************************************************************
@@ -228,7 +192,7 @@ void setup_gpio() {
         initCC1101once(&sdcardSPI); // (ARDUINO_M5STACK_CARDPUTER) and (ESP32S3DEVKITC1) and devices that
                                     // share CC1101 pin with only SDCard
     else initCC1101once(NULL);
-    // (ARDUINO_M5STICK_C_PLUS) || (ARDUINO_M5STICK_C_PLUS2) and others that doesn't share SPI with
+    // (ARDUINO_M5STICK_C_PLUS) || (ARDUINO_M5STICK_C_PLUS2) and others that doesn´t share SPI with
     // other devices (need to change it when Bruce board comes to shore)
 }
 
@@ -237,9 +201,9 @@ void setup_gpio() {
  **  Config tft
  *********************************************************************/
 void begin_tft() {
-    tft.setRotation(bruceConfig.rotation); // sometimes it misses the first command
+    tft.setRotation(bruceConfigPins.rotation); // sometimes it misses the first command
     tft.invertDisplay(bruceConfig.colorInverted);
-    tft.setRotation(bruceConfig.rotation);
+    tft.setRotation(bruceConfigPins.rotation);
     tftWidth = tft.width();
 #ifdef HAS_TOUCH
     tftHeight = tft.height() - 20;
@@ -281,8 +245,8 @@ void boot_screen_anim() {
         if (SD.exists("/boot.jpg")) boot_img = 1;
         else if (SD.exists("/boot.gif")) boot_img = 3;
     }
-    if (boot_img == 0 && littleFsMounted && LittleFS.exists("/boot.jpg")) boot_img = 2;
-    else if (boot_img == 0 && littleFsMounted && LittleFS.exists("/boot.gif")) boot_img = 4;
+    if (boot_img == 0 && LittleFS.exists("/boot.jpg")) boot_img = 2;
+    else if (boot_img == 0 && LittleFS.exists("/boot.gif")) boot_img = 4;
     if (bruceConfig.theme.boot_img) boot_img = 5; // override others
 
     tft.drawPixel(0, 0, 0);       // Forces back communication with TFT, to avoid ghosting
@@ -305,13 +269,13 @@ void boot_screen_anim() {
                 } else if (boot_img == 1) {
                     drawImg(SD, "/boot.jpg", 0, 0, true);
                     Serial.println("Image from SD");
-                } else if (boot_img == 2 && littleFsMounted) {
+                } else if (boot_img == 2) {
                     drawImg(LittleFS, "/boot.jpg", 0, 0, true);
                     Serial.println("Image from LittleFS");
                 } else if (boot_img == 3) {
                     drawImg(SD, "/boot.gif", 0, 0, true, 3600);
                     Serial.println("Image from SD");
-                } else if (boot_img == 4 && littleFsMounted) {
+                } else if (boot_img == 4) {
                     drawImg(LittleFS, "/boot.gif", 0, 0, true, 3600);
                     Serial.println("Image from LittleFS");
                 }
@@ -400,7 +364,7 @@ void startup_sound() {
         playAudioFile(bruceConfig.themeFS(), bruceConfig.getThemeItemImg(bruceConfig.theme.paths.boot_sound));
     } else if (SD.exists("/boot.wav")) {
         playAudioFile(&SD, "/boot.wav");
-    } else if (littleFsMounted && LittleFS.exists("/boot.wav")) {
+    } else if (LittleFS.exists("/boot.wav")) {
         playAudioFile(&LittleFS, "/boot.wav");
     }
 #endif
@@ -417,10 +381,6 @@ void setup() {
     ); // Must be invoked before Serial.begin(). Default is 256 chars
     Serial.begin(115200);
 
-    // Silence verbose LEDC/analogWrite spam from Arduino core
-    esp_log_level_set("ledc", ESP_LOG_NONE);
-    esp_log_level_set("esp32-hal-ledc", ESP_LOG_NONE);
-
     log_d("Total heap: %d", ESP.getHeapSize());
     log_d("Free heap: %d", ESP.getFreeHeap());
     if (psramInit()) log_d("PSRAM Started");
@@ -431,16 +391,15 @@ void setup() {
 
     // declare variables
     prog_handler = 0;
-    littleFsMounted = false;
     sdcardMounted = false;
     wifiConnected = false;
     BLEConnected = false;
-    bruceConfig.bright = 100; // there is no value yet
-    bruceConfig.rotation = ROTATION;
+    bruceConfig.bright = 100; // theres is no value yet
+    bruceConfigPins.rotation = ROTATION;
     setup_gpio();
 #if defined(HAS_SCREEN)
     tft.init();
-    tft.setRotation(bruceConfig.rotation);
+    tft.setRotation(bruceConfigPins.rotation);
     tft.fillScreen(TFT_BLACK);
     // bruceConfig is not read yet.. just to show something on screen due to long boot time
     tft.setTextColor(TFT_PURPLE, TFT_BLACK);
@@ -448,31 +407,22 @@ void setup() {
 #else
     tft.begin();
 #endif
-    StorageInitResult storageStatus = begin_storage();
-    const bool hasLittleFs =
-        (storageStatus & STORAGE_INIT_LFS_MOUNT_FAILED) == 0 && littleFsMounted;
-    const bool hasSdCard = (storageStatus & STORAGE_INIT_SD_FAILED) == 0;
-    const bool storageAvailable = hasLittleFs || hasSdCard;
-
-    if (!hasLittleFs) {
-        Serial.println("LittleFS unavailable; storage features limited");
-        if (storageStatus & STORAGE_INIT_LFS_FORMAT_BLOCKED)
-            Serial.println("LittleFS format skipped (manual action required)");
-        if (storageStatus & STORAGE_INIT_LFS_FORMAT_FAILED)
-            Serial.println("LittleFS format attempt failed");
-#if defined(HAS_SCREEN)
-        tft.setTextColor(TFT_RED, TFT_BLACK);
-        tft.drawCentreString("LittleFS mount failed", tft.width() / 2, tft.height() / 2, 1);
-#endif
-    }
-    if (!hasSdCard) Serial.println("SD card mount failed; SD features disabled");
-
-    if (storageAvailable) BatteryLogger::begin();
-    else log_w("Skipping BatteryLogger init due to missing storage");
-    SystemStatus::begin();
+    begin_storage();
     begin_tft();
     init_clock();
     init_led();
+
+    // Set WiFi country to avoid warnings and ensure max power
+    wifi_country_t country = {
+        .cc = "US",
+        .schan = 1,
+        .nchan = 14,
+        .max_tx_power = CONFIG_ESP_PHY_MAX_TX_POWER, // 20
+        .policy = WIFI_COUNTRY_POLICY_MANUAL
+    };
+
+    esp_wifi_set_max_tx_power(80); // 80 translates to 20dBm
+    esp_wifi_set_country(&country);
 
     // Some GPIO Settings (such as CYD's brightness control must be set after tft and sdcard)
     _post_setup_gpio();
@@ -481,23 +431,22 @@ void setup() {
     // #ifndef USE_TFT_eSPI_TOUCH
     // This task keeps running all the time, will never stop
     xTaskCreate(
-        taskInputHandler, // Task function
-        "InputHandler",   // Task Name
-        4096,             // Stack size
-        NULL,             // Task parameters
-        2,                // Task priority (0 to 3), loopTask has priority 2.
-        &xHandle          // Task handle (not used)
+        taskInputHandler,              // Task function
+        "InputHandler",                // Task Name
+        INPUT_HANDLER_TASK_STACK_SIZE, // Stack size
+        NULL,                          // Task parameters
+        2,                             // Task priority (0 to 3), loopTask has priority 2.
+        &xHandle                       // Task handle (not used)
     );
     // #endif
-    if (storageAvailable)
-        bruceConfig.openThemeFile(bruceConfig.themeFS(), bruceConfig.themePath);
-    else log_w("Theme loading skipped due to missing storage");
+#if defined(HAS_SCREEN)
+    bruceConfig.openThemeFile(bruceConfig.themeFS(), bruceConfig.themePath, false);
     if (!bruceConfig.instantBoot) {
         boot_screen_anim();
         startup_sound();
     }
-
     if (bruceConfig.wifiAtStartup) {
+        log_i("Loading Wifi at Startup");
         xTaskCreate(
             wifiConnectTask,   // Task function
             "wifiConnectTask", // Task Name
@@ -507,12 +456,11 @@ void setup() {
             NULL               // Task handle (not used)
         );
     }
-
+#endif
     //  start a task to handle serial commands while the webui is running
     startSerialCommandsHandlerTask();
 
     wakeUpScreen();
-
     if (bruceConfig.startupApp != "" && !startupApp.startApp(bruceConfig.startupApp)) {
         bruceConfig.setStartupApp("");
     }
@@ -526,19 +474,22 @@ void setup() {
 void loop() {
     // Interpreter must be ran in the loop() function, otherwise it breaks
     // called by 'stack canary watchpoint triggered (loopTask)'
-#if !defined(LITE_VERSION)
+#if !defined(LITE_VERSION) && !defined(DISABLE_INTERPRETER)
     if (interpreter_start) {
         TaskHandle_t interpreterTaskHandler = NULL;
+        vTaskDelete(serialcmdsTaskHandle); // stop serial commands while in interpreter
+        vTaskDelay(pdMS_TO_TICKS(10));
         xTaskCreate(
-            interpreterHandler,     // Task function
-            "interpreterHandler",   // Task Name
-            16384,                  // Stack size
-            NULL,                   // Task parameters
-            2,                      // Task priority (0 to 3), loopTask has priority 2.
-            &interpreterTaskHandler // Task handle
+            interpreterHandler,          // Task function
+            "interpreterHandler",        // Task Name
+            INTERPRETER_TASK_STACK_SIZE, // Stack size
+            NULL,                        // Task parameters
+            2,                           // Task priority (0 to 3), loopTask has priority 2.
+            &interpreterTaskHandler      // Task handle
         );
 
         while (interpreter_start == true) { vTaskDelay(pdMS_TO_TICKS(500)); }
+        startSerialCommandsHandlerTask();
         interpreter_start = false;
         previousMillis = millis(); // ensure that will not dim screen when get back to menu
     }
@@ -550,26 +501,15 @@ void loop() {
 }
 #else
 
-// alternative loop function for headless boards
-#include "core/wifi/webInterface.h"
-
 void loop() {
-    wifiConnecttoKnownNet(); // will write wifiConnected=true if connected
-    if (!wifiConnected) { wifiDisconnect(); }
-
-    // Try to connect to a known network
-
-    // if do not find a known network, starts in AP mode
-    Serial.println("Starting WebUI");
-    startWebUi(!wifiConnected); // true-> AP Mode, false-> my Network mode
-
+    tft.setLogging();
     Serial.println(
         "\n"
-        "??????  ??????  ??    ??  ?????? ??????? \n"
-        "??   ?? ??   ?? ??    ?? ??      ??      \n"
-        "??????  ??????  ??    ?? ??      ?????   \n"
-        "??   ?? ??   ?? ??    ?? ??      ??      \n"
-        "??????  ??   ??  ??????   ?????? ??????? \n"
+        "██████  ██████  ██    ██  ██████ ███████ \n"
+        "██   ██ ██   ██ ██    ██ ██      ██      \n"
+        "██████  ██████  ██    ██ ██      █████   \n"
+        "██   ██ ██   ██ ██    ██ ██      ██      \n"
+        "██████  ██   ██  ██████   ██████ ███████ \n"
         "                                         \n"
         "         PREDATORY FIRMWARE\n\n"
         "Tips: Connect to the WebUI for better experience\n"
@@ -583,4 +523,3 @@ void loop() {
     vTaskDelay(10 / portTICK_PERIOD_MS);
 }
 #endif
-

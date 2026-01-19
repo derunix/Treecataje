@@ -98,7 +98,7 @@ EspConnection::Message EspConnection::createPongMessage() {
 
 void EspConnection::sendPing() {
     peerOptions = {
-        {"Broadcast", [=]() { setDstAddress(broadcastAddress); }},
+        {"Broadcast", [this]() { setDstAddress(broadcastAddress); }},
     };
 
     Message message = createPingMessage();
@@ -174,7 +174,7 @@ String EspConnection::macToString(const uint8_t *mac) {
 }
 
 void EspConnection::appendPeerToList(const uint8_t *mac) {
-    peerOptions.push_back({macToString(mac).c_str(), [=]() { setDstAddress(mac); }});
+    peerOptions.push_back({macToString(mac).c_str(), [this, mac]() { setDstAddress(mac); }});
 }
 
 void EspConnection::onDataSent(const uint8_t *mac_addr, esp_now_send_status_t status) {
@@ -200,4 +200,12 @@ void EspConnection::onDataRecv(const uint8_t *mac, const uint8_t *incomingData, 
     if (recvMessage.pong) return appendPeerToList(mac);
 
     recvQueue.push_back(recvMessage);
+}
+
+void EspConnection::onDataSentStatic(const wifi_tx_info_t *info, esp_now_send_status_t status) {
+    if (instance) instance->onDataSent(info->src_addr, status);
+}
+
+void EspConnection::onDataRecvStatic(const esp_now_recv_info_t *info, const uint8_t *incomingData, int len) {
+    if (instance) instance->onDataRecv(info->src_addr, incomingData, len);
 }

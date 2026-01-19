@@ -10,34 +10,26 @@ MainMenu::MainMenu() {
 #if !defined(LITE_VERSION)
         &ethernetMenu,
 #endif
-#if !defined(REMOVE_RF_MENU)
         &rfMenu,
-#endif
-#if !defined(REMOVE_RFID_MENU)
         &rfidMenu,
-#endif
         &irMenu,
-#if defined(FM_SI4713)
+#if defined(FM_SI4713) && !defined(LITE_VERSION)
         &fmMenu,
-#endif
-#if defined(HAS_NS4168_SPKR)
-        &radioMenu,
-#endif
-#if defined(HAS_NS4168_SPKR) || defined(MIC_SPM1423)
-        &audioMenu,
 #endif
         &fileMenu,
         &gpsMenu,
-#if !defined(REMOVE_NRF_MENU)
         &nrf24Menu,
-#endif
 #if !defined(LITE_VERSION)
+#if !defined(DISABLE_INTERPRETER)
         &scriptsMenu,
+#endif
+        &loraMenu,
 #endif
         &othersMenu,
         &clockMenu,
+#if !defined(LITE_VERSION)
         &connectMenu,
-        &powerMenu,
+#endif
         &configMenu,
     };
 
@@ -57,7 +49,7 @@ void MainMenu::begin(void) {
             options.push_back(
                 {// selected lambda
                  _menuItems[i]->getName(),
-                 [=]() { _menuItems[i]->optionsMenu(); },
+                 [this, i]() { _menuItems[i]->optionsMenu(); },
                  false,                                  // selected = false
                  [](void *menuItem, bool shouldRender) { // render lambda
                      if (!shouldRender) return false;
@@ -65,7 +57,7 @@ void MainMenu::begin(void) {
 
                      MenuItemInterface *obj = static_cast<MenuItemInterface *>(menuItem);
                      float scale = float((float)tftWidth / (float)240);
-                     if (bruceConfig.rotation & 0b01) scale = float((float)tftHeight / (float)135);
+                     if (bruceConfigPins.rotation & 0b01) scale = float((float)tftHeight / (float)135);
                      obj->draw(scale);
 #if defined(HAS_TOUCH)
                      TouchFooter();
@@ -93,7 +85,7 @@ RESTART: // using gotos to avoid stackoverflow after many choices
         String label = item->getName();
         std::vector<String> l = bruceConfig.disabledMenus;
         bool enabled = find(l.begin(), l.end(), label) == l.end();
-        options.push_back({label, [=]() { bruceConfig.addDisabledMenu(label); }, enabled});
+        options.push_back({label, [this, label]() { bruceConfig.addDisabledMenu(label); }, enabled});
     }
     options.push_back({"Show All", [=]() { bruceConfig.disabledMenus.clear(); }, true});
     addOptionToMainMenu();

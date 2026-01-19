@@ -1,4 +1,5 @@
 #include "mic.h"
+#if defined(MIC_SPM1423) || defined(MIC_INMP441)
 #include "core/mykeyboard.h"
 #include "core/powerSave.h"
 #include "driver/gpio.h"
@@ -6,13 +7,20 @@
 #include "soc/io_mux_reg.h"
 #include <esp_heap_caps.h>
 
+#include "driver/i2s_pdm.h"
+#include "driver/i2s_std.h"
+static i2s_chan_handle_t i2s_chan = nullptr;
+#define I2S_NO_PIN I2S_GPIO_UNUSED
+#ifndef I2S_PIN_NO_CHANGE
+#define I2S_PIN_NO_CHANGE I2S_GPIO_UNUSED
+#endif
+
 #define FFT_SIZE 1024
 #define SPECTRUM_WIDTH 200
 #define SPECTRUM_HEIGHT 124
 #define HISTORY_LEN (SPECTRUM_WIDTH + 1)
-#define MIC_SAMPLE_RATE 16000
 
-static int8_t *i2s_buffer = nullptr;
+static int16_t *i2s_buffer = nullptr;
 static uint8_t *fftHistory = nullptr; // Linear buffer [WIDTH + 1][HEIGHT]
 static uint16_t posData = 0;
 
@@ -22,6 +30,15 @@ static uint16_t posData = 0;
 #ifndef PIN_DATA
 #define PIN_DATA I2S_PIN_NO_CHANGE
 #endif
+
+#ifdef PIN_BCLK
+gpio_num_t mic_bclk_pin = (gpio_num_t)PIN_BCLK;
+#else
+gpio_num_t mic_bclk_pin = I2S_PIN_NO_CHANGE;
+#endif
+
+void _setup_codec_mic(bool enable) __attribute__((weak));
+void _setup_codec_mic(bool enable) {}
 
 const unsigned char ImageData[768] = {
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x04, 0x00, 0x01,
@@ -78,42 +95,93 @@ static inline uint16_t rgb565(uint8_t r, uint8_t g, uint8_t b) {
 }
 
 bool deinitMicroPhone() {
+    // Disable codec, if exists
+    _setup_codec_mic(false);
     esp_err_t err = ESP_OK;
-    err |= i2s_driver_uninstall(I2S_NUM_0);
+    if (i2s_chan) {
+        i2s_channel_disable(i2s_chan);
+        err |= i2s_del_channel(i2s_chan);
+        i2s_chan = nullptr;
+    }
     gpio_reset_pin(GPIO_NUM_0);
     return err;
 }
 
 bool InitI2SMicroPhone() {
-    i2s_config_t i2s_config = {
-        .mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_RX | I2S_MODE_PDM),
-        .sample_rate = MIC_SAMPLE_RATE,
-        .bits_per_sample = I2S_BITS_PER_SAMPLE_16BIT,
-        .channel_format = I2S_CHANNEL_FMT_ONLY_RIGHT,
-        .communication_format = I2S_COMM_FORMAT_STAND_I2S,
-        .intr_alloc_flags = ESP_INTR_FLAG_LEVEL1,
-        .dma_buf_count = 8,
-        .dma_buf_len = SPECTRUM_HEIGHT,
+    // Enable codec, if exists
+    _setup_codec_mic(true);
+    i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_0, I2S_ROLE_MASTER);
+    chan_cfg.dma_desc_num = 8;
+    chan_cfg.dma_frame_num = SPECTRUM_HEIGHT;
+    esp_err_t err = i2s_new_channel(&chan_cfg, NULL, &i2s_chan);
+#if defined(MIC_INMP441) // #ifdef PIN_WS // INMP441
+    i2s_std_slot_config_t slot_cfg =
+        I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_MONO);
+    slot_cfg.slot_bit_width = I2S_SLOT_BIT_WIDTH_16BIT;
+    const i2s_std_config_t std_cfg = {
+        .clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(48000),
+        .slot_cfg = slot_cfg,
+        .gpio_cfg = {
+                     .mclk = I2S_GPIO_UNUSED,
+                     .bclk = (gpio_num_t)PIN_CLK,
+                     .ws = (gpio_num_t)PIN_WS,
+                     .dout = I2S_GPIO_UNUSED,
+                     .din = (gpio_num_t)PIN_DATA,
+                     .invert_flags = {.mclk_inv = false, .bclk_inv = false, .ws_inv = false},
+                     },
     };
-
-    i2s_pin_config_t pin_config = {
-#ifdef PIN_WS // INMP441
-        .bck_io_num = PIN_CLK,
-        .ws_io_num = PIN_WS,
+    if (err == ESP_OK) err = i2s_channel_init_std_mode(i2s_chan, &std_cfg);
 #else
-        .bck_io_num = I2S_PIN_NO_CHANGE,
-        .ws_io_num = PIN_CLK,
+
+    if (mic_bclk_pin != I2S_PIN_NO_CHANGE) {
+        gpio_num_t mic_ws_pin = (gpio_num_t)PIN_CLK;
+        i2s_std_config_t i2s_config;
+        memset(&i2s_config, 0, sizeof(i2s_std_config_t));
+#if defined(CONFIG_IDF_TARGET_ESP32P4)
+        i2s_config.clk_cfg.clk_src = i2s_clock_src_t::I2S_CLK_SRC_DEFAULT;
+#else
+        i2s_config.clk_cfg.clk_src = i2s_clock_src_t::I2S_CLK_SRC_PLL_160M;
 #endif
-        .data_out_num = I2S_PIN_NO_CHANGE,
-        .data_in_num = PIN_DATA,
-    };
+        i2s_config.clk_cfg.sample_rate_hz = 48000;                                     // dummy setting
+        i2s_config.clk_cfg.mclk_multiple = i2s_mclk_multiple_t::I2S_MCLK_MULTIPLE_256; // dummy setting
+        i2s_config.slot_cfg.data_bit_width = i2s_data_bit_width_t::I2S_DATA_BIT_WIDTH_16BIT;
+        i2s_config.slot_cfg.slot_bit_width = i2s_slot_bit_width_t::I2S_SLOT_BIT_WIDTH_16BIT;
+        i2s_config.slot_cfg.slot_mode = i2s_slot_mode_t::I2S_SLOT_MODE_MONO;
+        i2s_config.slot_cfg.slot_mask = i2s_std_slot_mask_t::I2S_STD_SLOT_LEFT;
+        i2s_config.slot_cfg.ws_width = 16;
+        i2s_config.slot_cfg.bit_shift = true;
+#if SOC_I2S_HW_VERSION_1 // For esp32/esp32-s2
+        i2s_config.slot_cfg.msb_right = false;
+#else
+        i2s_config.slot_cfg.left_align = true;
+        i2s_config.slot_cfg.big_endian = false;
+        i2s_config.slot_cfg.bit_order_lsb = false;
+#endif
+        i2s_config.gpio_cfg.bclk = (gpio_num_t)mic_bclk_pin;
+        i2s_config.gpio_cfg.ws = (gpio_num_t)mic_ws_pin;
+        i2s_config.gpio_cfg.dout = (gpio_num_t)I2S_PIN_NO_CHANGE;
+        i2s_config.gpio_cfg.mclk = (gpio_num_t)I2S_PIN_NO_CHANGE;
+        i2s_config.gpio_cfg.din = (gpio_num_t)PIN_DATA;
+        err = i2s_channel_init_std_mode(i2s_chan, &i2s_config);
+    } else {
 
-    esp_err_t err = ESP_OK;
-    err |= i2s_driver_install(I2S_NUM_0, &i2s_config, 0, NULL);
-    err |= i2s_set_pin(I2S_NUM_0, &pin_config);
-    err |= i2s_set_clk(I2S_NUM_0, MIC_SAMPLE_RATE, I2S_BITS_PER_SAMPLE_16BIT, I2S_CHANNEL_MONO);
-    i2s_zero_dma_buffer(I2S_NUM_0);
-
+        i2s_pdm_rx_clk_config_t clk_cfg = I2S_PDM_RX_CLK_DEFAULT_CONFIG(48000);
+        i2s_pdm_rx_slot_config_t slot_cfg =
+            I2S_PDM_RX_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_MONO);
+        slot_cfg.slot_bit_width = I2S_SLOT_BIT_WIDTH_16BIT;
+        const i2s_pdm_rx_config_t pdm_cfg = {
+            .clk_cfg = clk_cfg,
+            .slot_cfg = slot_cfg,
+            .gpio_cfg = {
+                         .clk = (gpio_num_t)PIN_CLK,
+                         .din = (gpio_num_t)PIN_DATA,
+                         .invert_flags = {.clk_inv = false},
+                         },
+        };
+        if (err == ESP_OK) err = i2s_channel_init_pdm_rx_mode(i2s_chan, &pdm_cfg);
+    }
+#endif
+    if (err == ESP_OK) err = i2s_channel_enable(i2s_chan);
     return (err == ESP_OK);
 }
 
@@ -124,10 +192,14 @@ void mic_test_one_task() {
     uint16_t *frameBuffer;
     if (psramFound())
         frameBuffer = (uint16_t *)ps_malloc(SPECTRUM_WIDTH * SPECTRUM_HEIGHT * sizeof(uint16_t));
-    else frameBuffer = (uint16_t *)malloc(SPECTRUM_WIDTH * SPECTRUM_HEIGHT * sizeof(uint16_t));
+    else {
+        closeSdCard(); // Close SDCard to release RAM, as it won't be used
+        frameBuffer = (uint16_t *)malloc(SPECTRUM_WIDTH * SPECTRUM_HEIGHT * sizeof(uint16_t));
+    }
 
     if (!frameBuffer) {
         Serial.println("Error alloc drawing frameBuffer, exiting");
+        displayError("Not Enough RAM", true);
         return;
     }
     tft.drawRect(
@@ -141,7 +213,8 @@ void mic_test_one_task() {
     while (1) {
         fft_config_t *plan = fft_init(FFT_SIZE, FFT_REAL, FFT_FORWARD, NULL, NULL);
         size_t bytesread;
-        i2s_read(I2S_NUM_0, (char *)i2s_buffer, FFT_SIZE * sizeof(int16_t), &bytesread, portMAX_DELAY);
+        i2s_channel_read(i2s_chan, (char *)i2s_buffer, FFT_SIZE * sizeof(int16_t), &bytesread, portMAX_DELAY);
+
         int16_t *samples = (int16_t *)i2s_buffer;
 
         for (int i = 0; i < FFT_SIZE; i++) { plan->input[i] = (float)samples[i] / 32768.0f; }
@@ -182,7 +255,8 @@ void mic_test_one_task() {
         wakeUpScreen();
         if (check(SelPress) || check(EscPress)) break;
     }
-    i2s_stop(I2S_NUM_0);
+    i2s_channel_disable(i2s_chan);
+
     free(frameBuffer);
 }
 
@@ -210,10 +284,10 @@ void mic_test() {
     InitI2SMicroPhone();
     // Alloc buffers in PSRAM if available
     if (psramFound()) {
-        i2s_buffer = (int8_t *)ps_malloc(FFT_SIZE * sizeof(int16_t));
+        i2s_buffer = (int16_t *)ps_malloc(FFT_SIZE * sizeof(int16_t));
         fftHistory = (uint8_t *)ps_malloc(HISTORY_LEN * SPECTRUM_HEIGHT);
     } else {
-        i2s_buffer = (int8_t *)malloc(FFT_SIZE * sizeof(int16_t));
+        i2s_buffer = (int16_t *)malloc(FFT_SIZE * sizeof(int16_t));
         fftHistory = (uint8_t *)malloc(HISTORY_LEN * SPECTRUM_HEIGHT);
     }
     if (!i2s_buffer || !fftHistory) {
@@ -243,31 +317,16 @@ void mic_test() {
 
 // https://github.com/MhageGH/esp32_SoundRecorder/tree/master
 
-static inline void writeUint16LE(byte *buffer, int offset, uint16_t value) {
-    buffer[offset] = value & 0xFF;
-    buffer[offset + 1] = (value >> 8) & 0xFF;
-}
-
-static inline void writeUint32LE(byte *buffer, int offset, uint32_t value) {
-    buffer[offset] = value & 0xFF;
-    buffer[offset + 1] = (value >> 8) & 0xFF;
-    buffer[offset + 2] = (value >> 16) & 0xFF;
-    buffer[offset + 3] = (value >> 24) & 0xFF;
-}
-
-void CreateWavHeader(byte *header, unsigned long waveDataSize) {
-    // Build a minimal PCM WAV header matching the capture settings.
-    const uint16_t numChannels = 1;
-    const uint16_t bitsPerSample = 16;
-    const uint32_t byteRate = MIC_SAMPLE_RATE * numChannels * (bitsPerSample / 8);
-    const uint16_t blockAlign = numChannels * (bitsPerSample / 8);
-    const uint32_t fileSizeMinus8 = waveDataSize + 36;
-
+void CreateWavHeader(byte *header, int waveDataSize) {
     header[0] = 'R';
     header[1] = 'I';
     header[2] = 'F';
     header[3] = 'F';
-    writeUint32LE(header, 4, fileSizeMinus8);
+    unsigned int fileSizeMinus8 = waveDataSize + 44 - 8;
+    header[4] = (byte)(fileSizeMinus8 & 0xFF);
+    header[5] = (byte)((fileSizeMinus8 >> 8) & 0xFF);
+    header[6] = (byte)((fileSizeMinus8 >> 16) & 0xFF);
+    header[7] = (byte)((fileSizeMinus8 >> 24) & 0xFF);
     header[8] = 'W';
     header[9] = 'A';
     header[10] = 'V';
@@ -276,46 +335,34 @@ void CreateWavHeader(byte *header, unsigned long waveDataSize) {
     header[13] = 'm';
     header[14] = 't';
     header[15] = ' ';
-    writeUint32LE(header, 16, 16); // PCM fmt chunk size
-    writeUint16LE(header, 20, 1); // PCM format
-    writeUint16LE(header, 22, numChannels);
-    writeUint32LE(header, 24, MIC_SAMPLE_RATE);
-    writeUint32LE(header, 28, byteRate);
-    writeUint16LE(header, 32, blockAlign);
-    writeUint16LE(header, 34, bitsPerSample);
+    header[16] = 0x10; // linear PCM
+    header[17] = 0x00;
+    header[18] = 0x00;
+    header[19] = 0x00;
+    header[20] = 0x01; // linear PCM
+    header[21] = 0x00;
+    header[22] = 0x01; // monoral
+    header[23] = 0x00;
+    header[24] = 0x80; // sampling rate 48000
+    header[25] = 0xBB;
+    header[26] = 0x00;
+    header[27] = 0x00;
+    header[28] = 0x00; // Byte/sec = 48000x2x1 = 96000
+    header[29] = 0x77;
+    header[30] = 0x01;
+    header[31] = 0x00;
+    header[32] = 0x02; // 16bit monoral
+    header[33] = 0x00;
+    header[34] = 0x10; // 16bit
+    header[35] = 0x00;
     header[36] = 'd';
     header[37] = 'a';
     header[38] = 't';
     header[39] = 'a';
-    writeUint32LE(header, 40, waveDataSize);
-}
-
-static String formatDurationMs(unsigned long ms) {
-    unsigned long totalSeconds = ms / 1000;
-    unsigned long minutes = totalSeconds / 60;
-    unsigned long seconds = totalSeconds % 60;
-
-    char buffer[8];
-    snprintf(buffer, sizeof(buffer), "%02lu:%02lu", minutes, seconds);
-    return String(buffer);
-}
-
-static void drawRecordingReadyScreen(const String &filename, const char *storage) {
-    drawMainBorderWithTitle("Dictaphone", true);
-    printSubtitle("Ready to capture", true);
-
-    padprintln(String("Target: ") + storage);
-    padprintln(String("File:   ") + filename);
-    padprintln("");
-    padprintln("Controls:");
-    padprintln(" Sel - start recording");
-    padprintln(" Esc - cancel");
-    displayRedStripe("Press Sel to start", TFT_WHITE, bruceConfig.priColor);
-}
-
-static void drawRecordingStatus(unsigned long startMs) {
-    String status = String("Recording ") + formatDurationMs(millis() - startMs) + " - Sel/Esc to stop";
-    displayRedStripe(status, TFT_WHITE, bruceConfig.priColor);
+    header[40] = (byte)(waveDataSize & 0xFF);
+    header[41] = (byte)((waveDataSize >> 8) & 0xFF);
+    header[42] = (byte)((waveDataSize >> 16) & 0xFF);
+    header[43] = (byte)((waveDataSize >> 24) & 0xFF);
 }
 
 void mic_record() {
@@ -326,52 +373,21 @@ void mic_record() {
         gpioInput = true;
         gpio_hold_en(GPIO_NUM_0);
     }
-    if (!InitI2SMicroPhone()) {
-        displayError("Microphone unavailable", true);
-        if (gpioInput) {
-            gpio_hold_dis(GPIO_NUM_0);
-            pinMode(GPIO_NUM_0, INPUT);
-        }
-        ioExpander.turnPinOnOff(IO_EXP_MIC, LOW);
+    InitI2SMicroPhone();
+
+    // Alloc buffers in PSRAM if available
+    if (psramFound()) i2s_buffer = (int16_t *)ps_malloc(FFT_SIZE * sizeof(int16_t));
+    else i2s_buffer = (int16_t *)malloc(FFT_SIZE * sizeof(int16_t));
+    if (!i2s_buffer) {
+        displayError("Fail to alloc buffers, exiting", true);
         return;
     }
 
     FS *fs = nullptr;
-    String targetPath;
-    auto teardown = [&](bool removeFile) {
-        if (removeFile && fs && targetPath.length() && fs->exists(targetPath)) { fs->remove(targetPath); }
-        if (i2s_buffer) {
-            free(i2s_buffer);
-            i2s_buffer = nullptr;
-        }
-        delay(10);
-        if (deinitMicroPhone()) Serial.println("Fail disabling I2S Driver");
-        if (gpioInput) {
-            gpio_hold_dis(GPIO_NUM_0);
-            pinMode(GPIO_NUM_0, INPUT);
-        } else {
-            pinMode(GPIO_NUM_0, OUTPUT);
-            digitalWrite(GPIO_NUM_0, LOW);
-        }
-        ioExpander.turnPinOnOff(IO_EXP_MIC, LOW);
-    };
-
-    // Alloc buffers in PSRAM if available
-    if (psramFound()) i2s_buffer = (int8_t *)ps_malloc(FFT_SIZE * sizeof(int16_t));
-    else i2s_buffer = (int8_t *)malloc(FFT_SIZE * sizeof(int16_t));
-    if (!i2s_buffer) {
-        displayError("Fail to alloc buffers, exiting", true);
-        teardown(false);
-        return;
-    }
-
     if (!getFsStorage(fs) || fs == nullptr) {
         displayError("No space left on device", true);
-        teardown(false);
         return;
     }
-
-    const char *storageLabel = (fs == &LittleFS) ? "Flash" : "SD";
 
     char filename[32];
     int index = 0;
@@ -379,7 +395,6 @@ void mic_record() {
     if (!fs->exists("/BruceMIC")) {
         if (!fs->mkdir("/BruceMIC")) {
             displayError("Error creating directory", true);
-            teardown(false);
             return;
         }
     }
@@ -387,68 +402,92 @@ void mic_record() {
     do {
         snprintf(filename, sizeof(filename), "/BruceMIC/recording_%d.wav", index++);
     } while (fs->exists(filename));
-    targetPath = filename;
-
-    drawRecordingReadyScreen(filename, storageLabel);
-    while (true) {
-        if (check(EscPress)) {
-            teardown(true);
-            displayInfo("Recording cancelled", true);
-            return;
-        }
-        if (check(SelPress)) break;
-    }
-
     File audioFile = fs->open(filename, FILE_WRITE, true);
     if (!audioFile) {
-        teardown(true);
         displayError("Error creating file", true);
         return;
     }
 
+    int record_time = 3;
+    int last_record_time = -1;
+    bool redraw = false;
+
+    while (!check(SelPress)) {
+        if (check(PrevPress)) { record_time--; }
+        if (check(NextPress)) { record_time++; }
+
+        record_time = constrain(record_time, 0, 300);
+        if (record_time != last_record_time) {
+            redraw = true;
+            last_record_time = record_time;
+        } else {
+            redraw = false;
+        }
+
+        if (redraw) {
+            String text;
+            if (record_time != 0) {
+                text = String("Length: ") + String(record_time) + String("s");
+            } else {
+                text = String("Length: Unlimited");
+            }
+            displayRedStripe(text, getComplementaryColor2(bruceConfig.priColor), bruceConfig.priColor);
+        }
+    }
+
     const int headerSize = 44;
     byte header[headerSize] = {0};
+
     audioFile.write(header, headerSize);
 
     unsigned long dataSize = 0;
+
     int bytesPerRead = FFT_SIZE * sizeof(int16_t);
     unsigned long startMillis = millis();
-    unsigned long lastRenderedSecond = 0;
-    drawRecordingStatus(startMillis);
-
-    while (true) {
-        size_t bytesRead = 0;
-        i2s_read(I2S_NUM_0, (char *)i2s_buffer, bytesPerRead, &bytesRead, portMAX_DELAY);
-        if (bytesRead > 0) {
-            audioFile.write((const uint8_t *)i2s_buffer, bytesRead);
-            dataSize += bytesRead;
+    if (record_time != 0) {
+        displayRedStripe("Recording...", 0xffff, 0x5db9);
+        while (millis() - startMillis < (unsigned long)record_time * 1000) {
+            size_t bytesRead = 0;
+            i2s_channel_read(i2s_chan, i2s_buffer, bytesPerRead, &bytesRead, 1000);
+            if (bytesRead > 0) {
+                audioFile.write((const uint8_t *)i2s_buffer, bytesRead);
+                dataSize += bytesRead;
+            }
         }
+    } else {
+        displayRedStripe("Rec... Press Sel to stop", 0xffff, 0x5db9);
+        while (!check(SelPress)) {
+            size_t bytesRead = 0;
+            i2s_channel_read(i2s_chan, (char *)i2s_buffer, bytesPerRead, &bytesRead, 1000);
 
-        unsigned long elapsedSeconds = (millis() - startMillis) / 1000;
-        if (elapsedSeconds != lastRenderedSecond) {
-            drawRecordingStatus(startMillis);
-            lastRenderedSecond = elapsedSeconds;
+            if (bytesRead > 0) {
+                audioFile.write((const uint8_t *)i2s_buffer, bytesRead);
+                dataSize += bytesRead;
+            }
         }
-
-        if (check(SelPress) || check(EscPress)) break;
     }
 
     audioFile.seek(0);
     CreateWavHeader(header, dataSize);
     audioFile.write(header, headerSize);
-    audioFile.flush();
     audioFile.close();
 
-    // Rewrite header once more to guarantee a clean RIFF chunk
-    File fix = fs->open(targetPath, "r+");
-    if (fix) {
-        CreateWavHeader(header, dataSize);
-        fix.write(header, headerSize);
-        fix.flush();
-        fix.close();
+    delay(10);
+    if (deinitMicroPhone()) Serial.println("Fail disabling I2S Driver");
+    if (gpioInput) {
+        gpio_hold_dis(GPIO_NUM_0);
+        pinMode(GPIO_NUM_0, INPUT);
+    } else {
+        pinMode(GPIO_NUM_0, OUTPUT);
+        digitalWrite(GPIO_NUM_0, LOW);
     }
-
-    teardown(false);
     Serial.println("Recording finished");
-    displaySuccess(String("Saved to ") + filename, true);
+    displaySuccess("Recording Finished", true);
+    ioExpander.turnPinOnOff(IO_EXP_MIC, LOW);
 }
+
+#else
+void mic_test() {}
+void mic_test_one_task() {}
+void mic_record() {}
+#endif
