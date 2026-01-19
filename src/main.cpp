@@ -86,6 +86,7 @@ int prog_handler; // 0 - Flash, 1 - LittleFS, 3 - Download
 String cachedPassword = "";
 bool interpreter_start = false;
 bool sdcardMounted = false;
+bool littleFsMounted = false;
 bool gpsConnected = false;
 
 // wifi globals

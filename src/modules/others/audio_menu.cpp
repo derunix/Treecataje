@@ -170,92 +170,17 @@ static PlayOutcome playTrackWithControls(AudioTrack &track, int index, int total
     if (byteRate == 0 && track.path.endsWith(".mp3")) byteRate = MP3_EST_BITRATE;
 
     PlayOutcome outcome;
-    unsigned long lastUi = 0;
-    unsigned long lastInputMs = 0;
-    unsigned long cooldownUntil = 0;
-    int noisyHits = 0;
 
-    auto debouncedPressed = [&](volatile bool &btn, uint32_t minGapMs = 300) -> bool {
-        if (!check(btn)) return false;
-        unsigned long now = millis();
-        if (now < cooldownUntil || (now - lastInputMs) < minGapMs) {
-            // If we keep seeing inputs inside the cooldown window, extend suppression
-            noisyHits++;
-            if (noisyHits > 4) {
-                cooldownUntil = now + 1200;
-                noisyHits = 0;
-            }
-            return false;
-        }
-        noisyHits = 0;
-        lastInputMs = now;
-        cooldownUntil = now + 400; // short cooldown to avoid rapid toggling
-        return true;
-    };
-
-    auto progressCb = [&](size_t pos, size_t size, AudioOutputI2S *out) -> bool {
-        if (debouncedPressed(EscPress)) {
-            outcome.res = PLAY_EXIT;
-            return false;
-        }
-        if (debouncedPressed(PrevPress)) {
-            outcome.res = PLAY_PREV;
-            return false;
-        }
-        if (debouncedPressed(NextPress)) {
-            outcome.res = PLAY_NEXT;
-            return false;
-        }
-        if (debouncedPressed(SelPress)) {
-            outcome.res = PLAY_PAUSE;
-            outcome.resumePos = pos;
-            return false;
-        }
-        if (debouncedPressed(UpPress)) {
-            volumePercent = std::min(100, volumePercent + 5);
-            volumeGain = ((float)volumePercent) / 100.0f;
-            bruceConfig.soundVolume = volumePercent;
-            out->SetGain(volumeGain);
-        }
-        if (debouncedPressed(DownPress)) {
-            volumePercent = std::max(0, volumePercent - 5);
-            volumeGain = ((float)volumePercent) / 100.0f;
-            bruceConfig.soundVolume = volumePercent;
-            out->SetGain(volumeGain);
-        }
-
-        unsigned long now = millis();
-        if (now - lastUi > 200) {
-            uint32_t totalSec = (byteRate > 0 && size > 0) ? size / byteRate : 0;
-            uint32_t posSec = (byteRate > 0 && pos > 0) ? pos / byteRate : 0;
-            String line = "Vol:";
-            line += volumePercent;
-            line += "% ";
-            line += formatTime(posSec);
-            if (totalSec > 0) {
-                line += "/";
-                line += formatTime(totalSec);
-            }
-            int percent = (size > 0) ? (100 * pos) / size : 0;
-            line += " ";
-            line += percent;
-            line += "%";
-            displayRedStripe(line, TFT_WHITE, bruceConfig.priColor);
-            lastUi = now;
-        }
-        return true;
-    };
-
-    bool stoppedByCb = false;
-    bool played = playAudioFile(track.fs, track.path, progressCb, startPos, &stoppedByCb);
+    // Note: Current playAudioFile() doesn't support callbacks/resume/volume control
+    // TODO: Re-implement advanced playback features when audio.cpp is updated
+    bool played = playAudioFile(track.fs, track.path);
     if (!played) {
         displayError("Playback failed", true);
         outcome.res = PLAY_FAIL;
         return outcome;
     }
-    if (outcome.res == PLAY_PAUSE && stoppedByCb) {
-        return playTrackWithControls(track, index, total, title, outcome.resumePos);
-    }
+    // Basic playback complete
+    outcome.res = PLAY_EXIT;
     return outcome;
 }
 

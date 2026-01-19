@@ -388,3 +388,9 @@ void nrf_channel_hopper() {
         if (CHECK_NRF_UART(mode) || CHECK_NRF_BOTH(mode)) NRFSerial.println("OFF");
     }
 }
+
+void nrf_jammer_pro() {
+    // TODO: Implement advanced jammer functionality
+    displayError("Not implemented yet");
+    delay(2000);
+}

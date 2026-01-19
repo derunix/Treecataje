@@ -338,3 +338,19 @@ bool isCharging() {
 #else
 bool isCharging() { return false; }
 #endif
+
+/***************************************************************************************
+** Function name: getBatteryVoltage()
+** Description:   Returns the current battery voltage (in Volts) if supported
+***************************************************************************************/
+#ifdef USE_BQ27220_VIA_I2C
+float getBatteryVoltage() {
+    // Return voltage from BQ27220 in Volts (getVolt returns millivolts)
+    return bq.getVolt(VOLT) / 1000.0f;
+}
+#else
+float getBatteryVoltage() {
+    // TODO: Implement voltage reading for non-BQ27220 devices
+    return 0.0f;
+}
+#endif

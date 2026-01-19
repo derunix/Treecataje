@@ -12,7 +12,9 @@
       "Bash([ -d \"$dir\" ])",
       "Bash(then echo \"Empty: $dir\")",
       "Bash(fi)",
-      "Bash(done)"
+      "Bash(done)",
+      "Bash(Select-Object -Last 100)",
+      "Bash(python -m platformio run:*)"
     ]
   }
 }

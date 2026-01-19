@@ -3,6 +3,7 @@
 
 RF24 NRFradio(NRF24_CE_PIN, NRF24_SS_PIN);
 SPIClass *NRFSPI;
+HardwareSerial NRFSerial(2); // UART2 for external NRF24 modules
 
 void nrf_info() {
     tft.fillScreen(bruceConfig.bgColor);
@@ -102,4 +103,10 @@ bool nrf_start(NRF24_MODE mode) {
     }
 
     return result;
+}
+
+NRF24_MODE nrf_setMode() {
+    // TODO: Implement mode selection UI for SPI vs UART
+    // For now, always return SPI mode
+    return NRF_MODE_SPI;
 }
