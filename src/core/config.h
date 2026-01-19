@@ -43,6 +43,7 @@ public:
     int soundVolume = 100;
     int wifiAtStartup = 0;
     int instantBoot = 0;
+    int batteryLogInterval = 0; // seconds, 0 disables logging
 
 #ifdef HAS_RGB_LED
     // Led
@@ -122,6 +123,8 @@ public:
     void validateSoundVolumeValue();
     void setWifiAtStartup(int value);
     void validateWifiAtStartupValue();
+    void setBatteryLogInterval(int value);
+    void validateBatteryLogIntervalValue();
 
 #ifdef HAS_RGB_LED
     // Led
