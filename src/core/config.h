@@ -11,6 +11,12 @@
 
 enum EvilPortalPasswordMode { FULL_PASSWORD = 0, FIRST_LAST_CHAR = 1, HIDE_PASSWORD = 2, SAVE_LENGTH = 3 };
 
+enum PowerMode {
+    POWER_MODE_AGGRESSIVE = 0,
+    POWER_MODE_BALANCED = 1,
+    POWER_MODE_PERFORMANCE = 2,
+};
+
 class BruceConfig : public BruceTheme {
 public:
     struct WiFiCredential {
@@ -44,6 +50,7 @@ public:
     int wifiAtStartup = 0;
     int instantBoot = 0;
     int batteryLogInterval = 0; // seconds, 0 disables logging
+    int powerMode = POWER_MODE_PERFORMANCE;
 
 #ifdef HAS_RGB_LED
     // Led
@@ -74,6 +81,12 @@ public:
 
     // RFID
     std::set<String> mifareKeys = {};
+
+    // GPS
+    enum GPSSource { GPS_SOURCE_LEGACY = 0, GPS_SOURCE_CASIC = 1 };
+    int gpsSource = GPS_SOURCE_LEGACY;
+    int gpsBaudrate = 9600;
+    int gpsUpdateRateMs = 1000;
 
     // Misc
     String startupApp = "";
@@ -125,6 +138,11 @@ public:
     void validateWifiAtStartupValue();
     void setBatteryLogInterval(int value);
     void validateBatteryLogIntervalValue();
+
+    // GPS
+    void setGpsSource(int value);
+    void setGpsBaudrate(int value);
+    void setGpsUpdateRate(int value);
 
 #ifdef HAS_RGB_LED
     // Led

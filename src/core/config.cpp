@@ -19,6 +19,10 @@ JsonDocument BruceConfig::toJson() const {
     setting["wifiAtStartup"] = wifiAtStartup;
     setting["instantBoot"] = instantBoot;
     setting["batteryLogInterval"] = batteryLogInterval;
+    setting["powerMode"] = powerMode;
+    setting["gpsSource"] = gpsSource;
+    setting["gpsBaudrate"] = gpsBaudrate;
+    setting["gpsUpdateRateMs"] = gpsUpdateRateMs;
 
 #ifdef HAS_RGB_LED
     setting["ledBright"] = ledBright;
@@ -190,6 +194,30 @@ void BruceConfig::fromFile(bool checkFS) {
     }
     if (!setting["batteryLogInterval"].isNull()) {
         batteryLogInterval = setting["batteryLogInterval"].as<int>();
+    } else {
+        count++;
+        log_e("Fail");
+    }
+    if (!setting["powerMode"].isNull()) {
+        powerMode = setting["powerMode"].as<int>();
+    } else {
+        count++;
+        log_e("Fail");
+    }
+    if (!setting["gpsSource"].isNull()) {
+        gpsSource = setting["gpsSource"].as<int>();
+    } else {
+        count++;
+        log_e("Fail");
+    }
+    if (!setting["gpsBaudrate"].isNull()) {
+        gpsBaudrate = setting["gpsBaudrate"].as<int>();
+    } else {
+        count++;
+        log_e("Fail");
+    }
+    if (!setting["gpsUpdateRateMs"].isNull()) {
+        gpsUpdateRateMs = setting["gpsUpdateRateMs"].as<int>();
     } else {
         count++;
         log_e("Fail");
@@ -807,4 +835,19 @@ void BruceConfig::setBatteryLogInterval(int value) {
 void BruceConfig::validateBatteryLogIntervalValue() {
     if (batteryLogInterval < 0) batteryLogInterval = 0;
     else if (batteryLogInterval > 3600) batteryLogInterval = 3600;
+}
+
+void BruceConfig::setGpsSource(int value) {
+    gpsSource = value;
+    saveFile();
+}
+
+void BruceConfig::setGpsBaudrate(int value) {
+    gpsBaudrate = value;
+    saveFile();
+}
+
+void BruceConfig::setGpsUpdateRate(int value) {
+    gpsUpdateRateMs = value;
+    saveFile();
 }
