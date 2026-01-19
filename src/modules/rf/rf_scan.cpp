@@ -159,7 +159,7 @@ void RFScan::read_raw() {
     uint8_t repetition = 0;
 
     received.te = 0;
-    for (transitions = 0; transitions < RCSWITCH_RAW_MAX_CHANGES; transitions++) {
+    for (transitions = 0; transitions < RCSWITCH_RAW_MAX_CHANGES && !check(EscPress); transitions++) {
         if (raw[transitions] == 0) break;
         if (transitions > 0) _data += " ";
         signed int sign = (transitions % 2 == 0) ? 1 : -1;
@@ -534,7 +534,7 @@ String rf_scan(float start_freq, float stop_freq, int max_loops) {
     int mark_rssi = -100;
     String out = "";
 
-    while (max_loops || !check(EscPress)) {
+    while (max_loops && !check(EscPress)) {
         vTaskDelay(1 / portTICK_PERIOD_MS);
         max_loops -= 1;
 
@@ -622,7 +622,7 @@ RestartRec:
                 received.data = "";
                 int sign = +1;
                 // if(received.preset.invertedSignal) sign = -1;
-                for (int i = 0; i < received.Bit * 2; i++) {
+                for (int i = 0; i < received.Bit * 2 && !check(EscPress); i++) {
                     if (i > 0) received.data += " ";
                     if (i % 2 == 0) sign = +1;
                     else sign = -1;
@@ -643,7 +643,7 @@ RestartRec:
             unsigned int *_raw = rcswitch.getRAWReceivedRawdata();
             int transitions = 0;
             signed int sign = 1;
-            for (transitions = 0; transitions < RCSWITCH_RAW_MAX_CHANGES; transitions++) {
+            for (transitions = 0; transitions < RCSWITCH_RAW_MAX_CHANGES && !check(EscPress); transitions++) {
                 if (_raw[transitions] == 0) break;
                 if (transitions > 0) received.data += " ";
                 if (transitions % 2 == 0) sign = +1;

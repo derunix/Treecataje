@@ -5,8 +5,7 @@
 
 void RadioMenu::optionsMenu() {
     options = {
-        {"Online Radio",       radioMainMenu},
-        {"Aerial Radio (WIP)", radioAirMock },
+        {"Online Radio", radioMainMenu},
     };
     addOptionToMainMenu();
 

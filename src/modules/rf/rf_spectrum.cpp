@@ -58,7 +58,7 @@ void rf_spectrum() {
             // Draw grid and info
             draw_tf_spectrum_grid();
             // Draw waveform based on signal strength
-            for (size_t i = 0; i < rx_size; i++) {
+            for (size_t i = 0; i < rx_size && !check(EscPress); i++) {
                 int lineHeight =
                     map(rx_items[i].duration0 + rx_items[i].duration1,
                         0,
@@ -110,7 +110,7 @@ PRINT:
             // Clear the display area
             // tft.fillRect(0, 0, tftWidth, tftHeight, bruceConfig.bgColor);
             // Draw waveform based on signal strength
-            for (int i = 0; i < RCSWITCH_RAW_MAX_CHANGES - 1; i += 2) {
+            for (int i = 0; i < RCSWITCH_RAW_MAX_CHANGES - 1 && !check(EscPress); i += 2) {
                 if (raw[i] == 0) break;
 
                 if (raw[i] > 20000) raw[i] = 20000;
@@ -209,8 +209,8 @@ void rf_CC1101_rssi() {
             tft.drawPixel(0, 0, 0); // To make sure CC1101 shared with TFT works properly
             const int base_y = tftHeight - 120;
             int prev = signal[0];
-            for (int i = 1; i < graph_size; i++) {
-                if (EscPress || SelPress) break;
+            for (int i = 1; i < graph_size && !check(EscPress); i++) {
+                if (check(SelPress)) break;
                 const int x0 = 20 + (i - 1);
                 const int x1 = 20 + i;
                 const int curr = signal[i];
@@ -234,8 +234,8 @@ void rf_CC1101_rssi() {
 
             int space = tftWidth / range;
             int max_idx = 0;
-            for (int i = 0; i < range; i++) {
-                if (EscPress || SelPress) break;
+            for (int i = 0; i < range && !check(EscPress); i++) {
+                if (check(SelPress)) break;
                 setMHZ(subghz_frequency_list[range_limits[bruceConfigPins.rfScanRange][0] + i]);
                 vTaskDelay(pdMS_TO_TICKS(5));
                 int rssi = ELECHOUSE_cc1101.getRssi();

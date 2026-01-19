@@ -651,9 +651,9 @@ void drawPlaybackScreen(const RadioStation &station, const RadioPlayer &player, 
         tft.drawString(nowPlaying.c_str(), 5, 105, 1);
     }
     
-    // Instructions
+    // Instructions - simplified
     tft.setTextColor(TFT_DARKGREY, bruceConfig.bgColor);
-    tft.drawCentreString("ESC: stop | Up/Down: volume", tftWidth / 2, tftHeight - 15, 1);
+    tft.drawCentreString("ESC: Stop | Prev/Next: Volume", tftWidth / 2, tftHeight - 15, 1);
 }
 
 void showPlayback(const RadioStation &station) {
@@ -700,17 +700,17 @@ void showPlayback(const RadioStation &station) {
     while (!debouncedPressed(EscPress)) {
         const unsigned long now = millis();
 
-        // Handle volume control
-        bool volumeUp = debouncedPressed(UpPress, 120) || debouncedPressed(PrevPress, 120);
-        bool volumeDown = debouncedPressed(DownPress, 120) || debouncedPressed(NextPress, 120);
+        // Handle volume control - simplified to only Prev/Next
+        bool volumeUp = debouncedPressed(PrevPress, 120);
+        bool volumeDown = debouncedPressed(NextPress, 120);
 
         if (volumeUp || volumeDown) {
             int newVolume = bruceConfig.soundVolume;
             if (volumeUp) {
-                newVolume += 5;
+                newVolume += 3; // Smaller increment for finer control
                 if (newVolume > 100) newVolume = 100;
             } else {
-                newVolume -= 5;
+                newVolume -= 3; // Smaller decrement for finer control
                 if (newVolume < 0) newVolume = 0;
             }
             
@@ -768,45 +768,25 @@ void radioStopPlayback() {
 void radioStationsMenu();
 
 void radioMainMenu() {
-    // Check if we should ignore inputs (recently exited from playback)
+    // Single input ignore check
     if (shouldIgnoreInputs()) {
-        delay(100); // Wait a bit more if in ignore window
+        delay(150);
     }
-    
+
     options.clear();
     options.push_back({"Stations", radioStationsMenu});
 
-    if (playerInstance.current() && playerInstance.status() != RadioPlayerStatus::Idle) {
-        options.push_back({"Now playing", [=]() { 
-            showPlayback(*playerInstance.current());
-            // Mark exit and clear inputs after returning from playback
-            markRadioExit();
-            delay(50);
-        }});
-        options.push_back({"Stop playback", radioStopPlayback});
-    }
-
-    options.push_back({"Back", backToMenu});
+    // Simplified - just show stations directly, playback controls in player UI
     addOptionToMainMenu();
-    
-    // Additional protection: clear inputs one more time before entering loopOptions
-    // and wait to ensure InputHandler has processed everything
-    if (shouldIgnoreInputs()) {
-        delay(200); // Extended wait if in ignore window
-    } else {
-        clearInputsAndWait();
-        delay(100);
-    }
-    
+
     loopOptions(options, MENU_TYPE_SUBMENU, "Online Radio");
 }
 
 void radioStationsMenu() {
-    // Check if we should ignore inputs (recently exited from playback)
     if (shouldIgnoreInputs()) {
-        delay(100); // Wait a bit more if in ignore window
+        delay(150);
     }
-    
+
     std::vector<RadioStation> stations;
     String err;
     if (!loadRadioStations(stations, err)) {
@@ -822,27 +802,15 @@ void radioStationsMenu() {
 
     options.clear();
     for (const auto &station : stations) {
-        // Capture station by value in lambda to avoid reference issues
         RadioStation stationCopy = station;
-        options.push_back({station.name, [stationCopy]() { 
+        options.push_back({station.name, [stationCopy]() {
             showPlayback(stationCopy);
-            // Mark exit and clear inputs after returning from playback
             markRadioExit();
             delay(50);
         }});
     }
-    options.push_back({"Back", radioMainMenu});
     addOptionToMainMenu();
-    
-    // Additional protection: clear inputs one more time before entering loopOptions
-    // and wait to ensure InputHandler has processed everything
-    if (shouldIgnoreInputs()) {
-        delay(200); // Extended wait if in ignore window
-    } else {
-        clearInputsAndWait();
-        delay(100);
-    }
-    
+
     loopOptions(options, MENU_TYPE_SUBMENU, "Stations");
 }
 

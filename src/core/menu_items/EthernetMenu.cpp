@@ -16,7 +16,7 @@ void EthernetMenu::start_ethernet() {
         eth = nullptr;
         return;
     }
-    while (!eth->is_connected()) { delay(100); }
+    while (!eth->is_connected()) { vTaskDelay(pdMS_TO_TICKS(20)); }
 }
 
 void EthernetMenu::optionsMenu() {
@@ -53,7 +53,7 @@ void EthernetMenu::optionsMenu() {
     };
     addOptionToMainMenu();
 
-    delay(200);
+    vTaskDelay(pdMS_TO_TICKS(200));
 
     loopOptions(options, MENU_TYPE_SUBMENU, "Ethernet");
 }

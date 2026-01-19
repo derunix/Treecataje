@@ -66,7 +66,7 @@ void rf_listen() {
     unsigned long lastPulseTime = millis();
     bool pulseActive = false;
 
-    while (check(EscPress)) { delay(10); }
+    while (!check(EscPress)) { delay(10); }
 
     while (!check(EscPress)) {
         displayRedStripe(

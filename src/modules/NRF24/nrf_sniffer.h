@@ -22,6 +22,10 @@ struct NrfSniffedDevice {
 // Collects observed 5-byte addresses and shows basic vendor/type guesses.
 void nrf_sniffer();
 
+// Interactive sniffer with device selection and per-device actions
+// Allows monitoring, jamming, and hijacking specific devices
+void nrf_sniffer_interactive();
+
 // Headless collector: scan the band and return the list of seen addresses.
 std::vector<NrfSniffedDevice> nrf_sniffer_collect(uint32_t scanTimeMs = 3000, uint16_t dwellPerChannelMs = 20);
 

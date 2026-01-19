@@ -34,7 +34,7 @@ void RFMenu::optionsMenu() {
     };
     addOptionToMainMenu();
 
-    delay(200);
+    vTaskDelay(pdMS_TO_TICKS(200));
     String txt = "Radio Frequency";
     if (bruceConfigPins.rfModule == CC1101_SPI_MODULE) txt += " (CC1101)"; // Indicates if CC1101 is connected
     else txt += " Tx: " + String(bruceConfigPins.rfTx) + " Rx: " + String(bruceConfigPins.rfRx);

@@ -334,9 +334,9 @@ Target pickFromSniffer() {
         NRFradio.setChannel(channel);
         NRFradio.flush_rx();
         unsigned long listenStart = millis();
-        while (millis() - listenStart < 25) {
+        while (millis() - listenStart < 25 && !check(EscPress)) {
             uint8_t pipe = 0;
-            while (NRFradio.available(&pipe)) {
+            while (NRFradio.available(&pipe) && !check(EscPress)) {
                 uint8_t len = NRFradio.getDynamicPayloadSize();
                 if (len == 0 || len > 32) {
                     NRFradio.flush_rx();
@@ -522,8 +522,9 @@ void keyboardInject(const Target &t) {
     drawPickHeader("Keyboard Inject");
         tft.printf("Addr %s\n", addrToString(t.addr).c_str());
         tft.printf("Ch %u Typing...\n", t.channel);
+        tft.println("ESC to cancel");
 
-        for (size_t i = 0; i < text.length(); ++i) {
+        for (size_t i = 0; i < text.length() && !check(EscPress); ++i) {
             uint8_t mod = 0, key = 0;
         if (!asciiToHid(text[i], mod, key)) continue;
 
@@ -534,7 +535,7 @@ void keyboardInject(const Target &t) {
     }
 
     tft.println("Done. Esc to exit");
-    while (!check(EscPress)) delay(50);
+    while (!check(EscPress)) delay(20);
 }
 
 void mouseInject(const Target &t) {
@@ -558,7 +559,7 @@ void mouseInject(const Target &t) {
     sendPayload(release, sizeof(release), 3);
 
     tft.println("Done. Esc to exit");
-    while (!check(EscPress)) delay(50);
+    while (!check(EscPress)) delay(20);
 }
 
 void spamRandom(const Target &t) {
@@ -805,7 +806,7 @@ void nrf_mousejack() {
                 delay(300);
 
                 // Type "calc" or "gnome-calculator"
-                for (size_t i = 0; i < cmd.length(); ++i) {
+                for (size_t i = 0; i < cmd.length() && !check(EscPress); ++i) {
                     uint8_t mod = 0, key = 0;
                     if (asciiToHid(cmd[i], mod, key)) {
                         uint8_t pkt[] = {mod, 0, key, 0, 0, 0, 0, 0};
@@ -927,7 +928,7 @@ void nrf_mousejack() {
 
             if (modeIdx < 4) {
                 tft.println("\nDone! Esc to continue");
-                while (!check(EscPress)) delay(50);
+                while (!check(EscPress)) delay(20);
             }
             lastDraw = -1; // Force redraw
         } else if (check(EscPress)) {

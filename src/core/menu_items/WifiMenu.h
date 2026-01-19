@@ -14,6 +14,7 @@ public:
 
 private:
     void configMenu(void);
+    void sniffersMenu(void);
 };
 
 #endif
