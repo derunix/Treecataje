@@ -25,15 +25,21 @@ void nrf_info() {
     while (!check(AnyKeyPress));
 }
 
-bool nrf_start() {
+bool nrf_start(NRF24_MODE mode) {
+    // Note: mode parameter added for compatibility with upstream
+    // Currently only SPI mode is implemented
+    if (mode != NRF_MODE_SPI) {
+        Serial.printf("[NRF24] Warning: Only SPI mode supported, requested mode=%d\n", mode);
+    }
+
     // Validate pins before use
     if (bruceConfigPins.NRF24_bus.cs == GPIO_NUM_NC || bruceConfigPins.NRF24_bus.io0 == GPIO_NUM_NC) {
         Serial.println("[NRF24] Error: CS or CE pin not configured");
         return false;
     }
 
-    Serial.printf("[NRF24] Initializing with CE=%d, CS=%d\n",
-                  bruceConfigPins.NRF24_bus.io0, bruceConfigPins.NRF24_bus.cs);
+    Serial.printf("[NRF24] Initializing with CE=%d, CS=%d, mode=%d\n",
+                  bruceConfigPins.NRF24_bus.io0, bruceConfigPins.NRF24_bus.cs, mode);
 
     pinMode(bruceConfigPins.NRF24_bus.cs, OUTPUT);
     digitalWrite(bruceConfigPins.NRF24_bus.cs, HIGH);
