@@ -11,6 +11,8 @@
 #include "core/mykeyboard.h"
 #include "core/sd_functions.h"
 #include "current_year.h"
+#include <TinyGPS++.h>
+#include "gps_provider.h"
 
 #define MAX_WAIT 5000
 
@@ -39,31 +41,25 @@ void GPSTracker::setup() {
 }
 
 bool GPSTracker::begin_gps() {
-    GPSserial.begin(
-        bruceConfig.gpsBaudrate, SERIAL_8N1, bruceConfigPins.gps_bus.rx, bruceConfigPins.gps_bus.tx
-    );
-
+    gps_provider_begin();
     int count = 0;
     padprintln("Waiting for GPS data");
-    while (GPSserial.available() <= 0) {
+    while (!gps_provider_seen_bytes(false)) {
         if (check(EscPress)) {
             end();
             return false;
         }
         displayTextLine("Waiting GPS: " + String(count) + "s");
         count++;
+        gps_provider_tick();
         vTaskDelay(1000 / portTICK_PERIOD_MS);
     }
-
-    gpsConnected = true;
     return true;
 }
 
 void GPSTracker::end() {
-    GPSserial.end();
-
+    gps_provider_end();
     returnToMenu = true;
-    gpsConnected = false;
 }
 
 void GPSTracker::loop() {
@@ -74,42 +70,42 @@ void GPSTracker::loop() {
 
         if (check(EscPress) || returnToMenu) return end();
 
-        if (GPSserial.available() > 0) {
-            count = 0;
-            while (GPSserial.available() > 0) gps.encode(GPSserial.read());
-
-            if (gps.location.isUpdated()) {
+        gps_provider_tick();
+        if (gps_provider_fix_updated(true)) {
+            fix = gps_provider_get_fix();
+            if (fix.fix_valid) {
                 padprintln("GPS location updated");
                 set_position();
                 add_coord();
             } else {
-                padprintln("GPS location not updated");
+                padprintln("GPS data invalid");
                 dump_gps_data();
-
-                if (filename == "" && gps.date.year() >= CURRENT_YEAR && gps.date.year() < CURRENT_YEAR + 5)
-                    create_filename();
             }
         } else {
-            if (count > 5) {
+            if (count > 5 && !gps_provider_seen_bytes(false)) {
                 displayError("GPS not Found!");
                 return end();
             }
-            padprintln("No GPS data available");
+            padprintln("GPS location not updated");
+            dump_gps_data();
+
+            if (filename == "" && fix.year >= CURRENT_YEAR && fix.year < CURRENT_YEAR + 5) create_filename();
             count++;
         }
 
         int tmp = millis();
-        while (millis() - tmp < MAX_WAIT && !gps.location.isUpdated()) {
+        while (millis() - tmp < MAX_WAIT && !gps_provider_fix_updated(false)) {
+            gps_provider_tick();
             if (check(EscPress) || returnToMenu) return end();
         }
     }
 }
 
 void GPSTracker::set_position() {
-    double lat = gps.location.lat();
-    double lng = gps.location.lng();
+    double lat = fix.lat_deg;
+    double lng = fix.lon_deg;
 
-    if (initial_position_set) distance += gps.distanceBetween(cur_lat, cur_lng, lat, lng);
+    if (initial_position_set) distance += TinyGPSPlus::distanceBetween(cur_lat, cur_lng, lat, lng);
     else initial_position_set = true;
 
     cur_lat = lat;
@@ -130,15 +126,15 @@ void GPSTracker::display_banner() {
 }
 
 void GPSTracker::dump_gps_data() {
-    if (!date_time_updated && (!gps.date.isUpdated() || !gps.time.isUpdated())) {
+    if (!date_time_updated && fix.year == 0) {
         padprintln("Waiting for valid GPS data");
         return;
     }
     date_time_updated = true;
-    padprintf(2, "Date: %02d-%02d-%02d\n", gps.date.year(), gps.date.month(), gps.date.day());
-    padprintf(2, "Time: %02d:%02d:%02d\n", gps.time.hour(), gps.time.minute(), gps.time.second());
-    padprintf(2, "Sat:  %d\n", gps.satellites.value());
-    padprintf(2, "HDOP: %.2f\n", gps.hdop.hdop());
+    padprintf(2, "Date: %02d-%02d-%02d\n", fix.year, fix.month, fix.day);
+    padprintf(2, "Time: %02d:%02d:%02d\n", fix.hour, fix.min, fix.sec);
+    padprintf(2, "Sat:  %d\n", fix.sats_used);
+    padprintf(2, "HDOP: %.2f\n", fix.hdop);
 }
 
 void GPSTracker::create_filename() {
@@ -146,12 +142,12 @@ void GPSTracker::create_filename() {
     sprintf(
         timestamp,
         "%02d%02d%02d_%02d%02d%02d",
-        gps.date.year() % 100,
-        gps.date.month() % 100,
-        gps.date.day() % 100,
-        gps.time.hour() % 100,
-        gps.time.minute() % 100,
-        gps.time.second() % 100
+        fix.year % 100,
+        fix.month % 100,
+        fix.day % 100,
+        fix.hour % 100,
+        fix.min % 100,
+        fix.sec % 100
     );
     filename = String(timestamp) + "_gps_tracker.gpx";
 }
@@ -220,16 +216,16 @@ void GPSTracker::add_coord() {
 
     if (is_new_file) add_initial_file_data(file);
 
-    file.printf("      <trkpt lat=\"%f\" lon=\"%f\">\n", gps.location.lat(), gps.location.lng());
+    file.printf("      <trkpt lat=\"%f\" lon=\"%f\">\n", fix.lat_deg, fix.lon_deg);
     file.println("        <sym>Waypoint</sym>");
-    file.printf("        <ele>%f</ele>\n", gps.altitude.meters());
-    file.printf("        <hdop>%f</hdop>\n", gps.hdop.hdop());
-    file.printf("        <sat>%d</sat>\n", gps.satellites.value());
+    file.printf("        <ele>%f</ele>\n", fix.alt_m);
+    file.printf("        <hdop>%f</hdop>\n", fix.hdop);
+    file.printf("        <sat>%d</sat>\n", fix.sats_used);
     file.println("      </trkpt>");
 
     gpsCoordCount++;
 
     file.close();
 
-    padprintf(2, "Coord: %.6f, %.6f\n", gps.location.lat(), gps.location.lng());
+    padprintf(2, "Coord: %.6f, %.6f\n", fix.lat_deg, fix.lon_deg);
 }

@@ -80,6 +80,8 @@ void setWifiStartupConfig();
 void setStartupApp();
 
 void setGpsBaudrateMenu();
+void setGpsSourceMenu();
+void setGpsUpdateRateMenu();
 
 void setNetworkCredsMenu();
 

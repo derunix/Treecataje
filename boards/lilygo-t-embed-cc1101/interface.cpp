@@ -169,7 +169,7 @@ IRAM_ATTR void checkPosition() {
 ** Handles the variables PrevPress, NextPress, SelPress, AnyKeyPress and EscPress
 **********************************************************************/
 void InputHandler(void) {
-    static unsigned long tm = millis();  // debauce for buttons
+    static unsigned long tm = millis();  // debounce for buttons - increased to 250ms
     static unsigned long tm2 = millis(); // delay between Select and encoder (avoid missclick)
     static bool selHeld = false;
     static unsigned long selPressedAt = 0;
@@ -178,6 +178,8 @@ void InputHandler(void) {
     static unsigned long escPressedAt = 0;
 #endif
     static int _last_dir = 0;
+    static int _noise_counter = 0;
+    static unsigned long _last_noise_reset = 0;
     const unsigned long now = millis();
 
     // Track raw press/release timing to log hold durations.
@@ -186,6 +188,12 @@ void InputHandler(void) {
     const bool escRawPressed = digitalRead(BK_BTN) == BTN_ACT;
 #endif
 
+    // Anti-noise: reset counter every 2 seconds
+    if (now - _last_noise_reset > 2000) {
+        _noise_counter = 0;
+        _last_noise_reset = now;
+    }
+
     if (selRawPressed && !selHeld) {
         selHeld = true;
         selPressedAt = now;
@@ -193,10 +201,15 @@ void InputHandler(void) {
         const unsigned long heldMs = now - selPressedAt;
         Serial.printf("Select button held for %lums\n", static_cast<unsigned long>(heldMs));
         selHeld = false;
-        if (heldMs > 0 && now - tm2 > 200) {
+        // Increased debounce time from 200ms to 300ms and require minimum 50ms hold
+        if (heldMs >= 50 && now - tm2 > 300) {
             _last_dir = 0;
             SelPress = true;
             tm = now;
+        } else if (heldMs < 50) {
+            // Potential noise/bounce detected
+            _noise_counter++;
+            Serial.printf("Potential bounce detected (hold=%lums, count=%d)\n", heldMs, _noise_counter);
         }
     }
 
@@ -205,16 +218,34 @@ void InputHandler(void) {
         escHeld = true;
         escPressedAt = now;
     } else if (!escRawPressed && escHeld) {
-        Serial.printf("Back button held for %lums\n", static_cast<unsigned long>(now - escPressedAt));
+        const unsigned long heldMs = now - escPressedAt;
+        Serial.printf("Back button held for %lums\n", heldMs);
         escHeld = false;
+        // Require minimum 50ms hold for back button too
+        if (heldMs < 50) {
+            _noise_counter++;
+            Serial.printf("Back button bounce detected (hold=%lums, count=%d)\n", heldMs, _noise_counter);
+            return; // Ignore this press
+        }
     }
 #endif
+
+    // If too many bounces detected (>10 in 2 seconds), ignore all inputs for 500ms
+    if (_noise_counter > 10) {
+        Serial.println("Too many bounces detected, ignoring inputs for 500ms");
+        delay(500);
+        _noise_counter = 0;
+        _last_noise_reset = now;
+        forceClearAllInputs();
+        return;
+    }
 
     bool sel = !BTN_ACT;
     bool esc = !BTN_ACT;
     _last_dir = (int)encoder->getDirection();
 
-    if (now - tm > 200 || LongPress) {
+    // Increased debounce from 200ms to 250ms
+    if (now - tm > 250 || LongPress) {
         sel = selRawPressed ? BTN_ACT : !BTN_ACT;
 #ifdef T_EMBED_1101
         esc = escRawPressed ? BTN_ACT : !BTN_ACT;
@@ -247,6 +278,18 @@ void InputHandler(void) {
         Serial.println("EscPressed");
         tm = now;
     }
+}
+
+// Helper function to clear all inputs - used after noisy events
+static void forceClearAllInputs() {
+    EscPress = false;
+    SelPress = false;
+    PrevPress = false;
+    NextPress = false;
+    UpPress = false;
+    DownPress = false;
+    AnyKeyPress = false;
+    SerialCmdPress = false;
 }
 
 void powerOff() {

@@ -67,7 +67,9 @@ JsonDocument BruceConfig::toJson() const {
     JsonArray _mifareKeys = setting["mifareKeys"].to<JsonArray>();
     for (auto key : mifareKeys) _mifareKeys.add(key);
 
+    setting["gpsSource"] = gpsSource;
     setting["gpsBaudrate"] = gpsBaudrate;
+    setting["gpsUpdateRateMs"] = gpsUpdateRateMs;
 
     setting["startupApp"] = startupApp;
     setting["wigleBasicToken"] = wigleBasicToken;
@@ -406,8 +408,20 @@ void BruceConfig::fromFile(bool checkFS) {
         log_e("Fail");
     }
 
+    if (!setting["gpsSource"].isNull()) {
+        gpsSource = setting["gpsSource"].as<int>();
+    } else {
+        count++;
+        log_e("Fail");
+    }
     if (!setting["gpsBaudrate"].isNull()) {
         gpsBaudrate = setting["gpsBaudrate"].as<int>();
+    } else {
+        count++;
+        log_e("Fail");
+    }
+    if (!setting["gpsUpdateRateMs"].isNull()) {
+        gpsUpdateRateMs = setting["gpsUpdateRateMs"].as<int>();
     } else {
         count++;
         log_e("Fail");
@@ -519,6 +533,8 @@ void BruceConfig::validateConfig() {
     validateRfidModuleValue();
     validateMifareKeysItems();
     validateGpsBaudrateValue();
+    validateGpsSourceValue();
+    validateGpsUpdateRateValue();
     validateDevModeValue();
     validateColorInverted();
 }
@@ -861,6 +877,34 @@ void BruceConfig::validateGpsBaudrateValue() {
     if (gpsBaudrate != 9600 && gpsBaudrate != 19200 && gpsBaudrate != 57600 && gpsBaudrate != 38400 &&
         gpsBaudrate != 115200)
         gpsBaudrate = 9600;
+}
+
+void BruceConfig::setGpsSource(int value) {
+    gpsSource = value;
+    validateGpsSourceValue();
+    saveFile();
+}
+
+void BruceConfig::validateGpsSourceValue() {
+    if (gpsSource != GPS_SOURCE_LEGACY && gpsSource != GPS_SOURCE_CASIC) gpsSource = GPS_SOURCE_LEGACY;
+}
+
+void BruceConfig::setGpsUpdateRate(int value) {
+    gpsUpdateRateMs = value;
+    validateGpsUpdateRateValue();
+    saveFile();
+}
+
+void BruceConfig::validateGpsUpdateRateValue() {
+    const int allowed[] = {100, 200, 250, 500, 1000};
+    bool ok = false;
+    for (int v : allowed) {
+        if (gpsUpdateRateMs == v) {
+            ok = true;
+            break;
+        }
+    }
+    if (!ok) gpsUpdateRateMs = 1000;
 }
 
 void BruceConfig::setStartupApp(String value) {

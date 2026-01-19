@@ -1,5 +1,6 @@
 #include "core/main_menu.h"
 #include <globals.h>
+#include <esp_log.h>
 
 #include "core/batteryLogger.h"
 #include "core/powerSave.h"
@@ -61,7 +62,7 @@ void __attribute__((weak)) taskInputHandler(void *parameter) {
         // Sometimes this task run 2 or more times before looptask,
         // and navigation gets stuck, the idea here is run the input detection
         // if AnyKeyPress is false, or rerun if it was not renewed within 75ms (arbitrary)
-        // because AnyKeyPress will be true if didn´t passed through a check(bool var)
+        // because AnyKeyPress will be true if didn?t passed through a check(bool var)
         if (!AnyKeyPress || millis() - timer > 75) {
             NextPress = false;
             PrevPress = false;
@@ -227,7 +228,7 @@ void setup_gpio() {
         initCC1101once(&sdcardSPI); // (ARDUINO_M5STACK_CARDPUTER) and (ESP32S3DEVKITC1) and devices that
                                     // share CC1101 pin with only SDCard
     else initCC1101once(NULL);
-    // (ARDUINO_M5STICK_C_PLUS) || (ARDUINO_M5STICK_C_PLUS2) and others that doesn´t share SPI with
+    // (ARDUINO_M5STICK_C_PLUS) || (ARDUINO_M5STICK_C_PLUS2) and others that doesn't share SPI with
     // other devices (need to change it when Bruce board comes to shore)
 }
 
@@ -416,6 +417,10 @@ void setup() {
     ); // Must be invoked before Serial.begin(). Default is 256 chars
     Serial.begin(115200);
 
+    // Silence verbose LEDC/analogWrite spam from Arduino core
+    esp_log_level_set("ledc", ESP_LOG_NONE);
+    esp_log_level_set("esp32-hal-ledc", ESP_LOG_NONE);
+
     log_d("Total heap: %d", ESP.getHeapSize());
     log_d("Free heap: %d", ESP.getFreeHeap());
     if (psramInit()) log_d("PSRAM Started");
@@ -430,7 +435,7 @@ void setup() {
     sdcardMounted = false;
     wifiConnected = false;
     BLEConnected = false;
-    bruceConfig.bright = 100; // theres is no value yet
+    bruceConfig.bright = 100; // there is no value yet
     bruceConfig.rotation = ROTATION;
     setup_gpio();
 #if defined(HAS_SCREEN)
@@ -560,11 +565,11 @@ void loop() {
 
     Serial.println(
         "\n"
-        "██████  ██████  ██    ██  ██████ ███████ \n"
-        "██   ██ ██   ██ ██    ██ ██      ██      \n"
-        "██████  ██████  ██    ██ ██      █████   \n"
-        "██   ██ ██   ██ ██    ██ ██      ██      \n"
-        "██████  ██   ██  ██████   ██████ ███████ \n"
+        "??????  ??????  ??    ??  ?????? ??????? \n"
+        "??   ?? ??   ?? ??    ?? ??      ??      \n"
+        "??????  ??????  ??    ?? ??      ?????   \n"
+        "??   ?? ??   ?? ??    ?? ??      ??      \n"
+        "??????  ??   ??  ??????   ?????? ??????? \n"
         "                                         \n"
         "         PREDATORY FIRMWARE\n\n"
         "Tips: Connect to the WebUI for better experience\n"
@@ -578,3 +583,4 @@ void loop() {
     vTaskDelay(10 / portTICK_PERIOD_MS);
 }
 #endif
+

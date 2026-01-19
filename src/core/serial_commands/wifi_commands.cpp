@@ -17,7 +17,15 @@ uint32_t wifiCallback(cmd *c) {
     String pwd = pwdArg.getValue();
     pwd.trim();
 
-    if (status == "off") {
+    if (status.length() == 0 || status == "status") {
+        Serial.printf(
+            "WiFi: %s\nIP: %s\nMode: %s\n",
+            wifiConnected ? "connected" : "disconnected",
+            wifiConnected ? wifiIP.c_str() : "-",
+            WiFi.getMode() == WIFI_AP ? "AP" : (WiFi.getMode() == WIFI_STA ? "STA" : "AP+STA")
+        );
+        return true;
+    } else if (status == "off") {
         wifiDisconnect();
         return true;
     } else if (status == "on") {
@@ -34,12 +42,12 @@ uint32_t wifiCallback(cmd *c) {
         return true;
     } else {
         Serial.println(
-            "Invalid status: " + status +
-            "\n"
-            "Possible commands: \n"
-            "-> wifi off (Disconnects Wifi)\n"
-            "-> wifi on  (Connects to a known Wifi network. if there's no known network, starts in AP Mode)\n"
-            "-> wifi add SSID Password (adds a network to the list)"
+            "Invalid status: " + status + "\n"
+            "Possible commands:\n"
+            "-> wifi             (show status)\n"
+            "-> wifi on          (connect to known WiFi or start AP)\n"
+            "-> wifi off         (disconnect WiFi)\n"
+            "-> wifi add SSID PASSWORD (store credentials)"
         );
         return false;
     }
@@ -63,7 +71,7 @@ void createWifiCommands(SimpleCLI *cli) {
     webuiCmd.addFlagArg("noAp");
 
     Command wifiCmd = cli->addCommand("wifi", wifiCallback);
-    wifiCmd.addPosArg("status");
+    wifiCmd.addPosArg("status", "");
     wifiCmd.addPosArg("ssid", "");
     wifiCmd.addPosArg("pwd", "");
 }

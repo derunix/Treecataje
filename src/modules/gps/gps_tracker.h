@@ -9,8 +9,9 @@
 #ifndef __GPS_TRACKER_H__
 #define __GPS_TRACKER_H__
 
-#include <TinyGPS++.h>
 #include <globals.h>
+#include "gps_provider.h"
+#include "gps_types.h"
 
 class GPSTracker {
 public:
@@ -33,8 +34,7 @@ private:
     double cur_lng;
     double distance = 0;
     String filename = "";
-    TinyGPSPlus gps;
-    HardwareSerial GPSserial = HardwareSerial(2);
+    gps_fix_t fix = {};
     int gpsCoordCount = 0;
 
     /////////////////////////////////////////////////////////////////////////////////////

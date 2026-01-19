@@ -225,5 +225,5 @@ bool wifiConnecttoKnownNet(void) {
         wifiIP = WiFi.localIP().toString();
         updateClockTimezone();
     }
-    return false;
+    return result || WiFi.status() == WL_CONNECTED;
 }

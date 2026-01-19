@@ -74,21 +74,104 @@ void _setBrightness(uint8_t brightval) {
 **********************************************************************/
 void InputHandler(void) {
     static unsigned long tm = 0;
-    if (millis() - tm < 200 && !LongPress) return;
+    static unsigned long up_tm = 0, sel_tm = 0, dw_tm = 0;
+    static bool up_held = false, sel_held = false, dw_held = false;
+    static unsigned long up_press_at = 0, sel_press_at = 0, dw_press_at = 0;
+    static int bounce_counter = 0;
+    static unsigned long last_bounce_reset = 0;
+
+    // Increased debounce from 200ms to 250ms for better stability
+    if (millis() - tm < 250 && !LongPress) return;
+
+    // Reset bounce counter every 2 seconds
+    unsigned long now = millis();
+    if (now - last_bounce_reset > 2000) {
+        bounce_counter = 0;
+        last_bounce_reset = now;
+    }
 
     bool upPressed = (digitalRead(UP_BTN) == LOW);
     bool selPressed = (digitalRead(SEL_BTN) == LOW);
     bool dwPressed = (digitalRead(DW_BTN) == LOW);
+
+    // Debounce each button individually with minimum hold time requirement
+    bool upValid = false, selValid = false, dwValid = false;
+
+    // UP button processing
+    if (upPressed && !up_held) {
+        up_held = true;
+        up_press_at = now;
+    } else if (!upPressed && up_held) {
+        unsigned long held_ms = now - up_press_at;
+        up_held = false;
+        // Require minimum 50ms hold to be valid press
+        if (held_ms >= 50 && now - up_tm > 250) {
+            upValid = true;
+            up_tm = now;
+        } else if (held_ms < 50) {
+            bounce_counter++;
+            Serial.printf("UP button bounce (held=%lums, count=%d)\n", held_ms, bounce_counter);
+        }
+    }
+
+    // SEL button processing
+    if (selPressed && !sel_held) {
+        sel_held = true;
+        sel_press_at = now;
+    } else if (!selPressed && sel_held) {
+        unsigned long held_ms = now - sel_press_at;
+        sel_held = false;
+        if (held_ms >= 50 && now - sel_tm > 250) {
+            selValid = true;
+            sel_tm = now;
+        } else if (held_ms < 50) {
+            bounce_counter++;
+            Serial.printf("SEL button bounce (held=%lums, count=%d)\n", held_ms, bounce_counter);
+        }
+    }
+
+    // DOWN button processing
+    if (dwPressed && !dw_held) {
+        dw_held = true;
+        dw_press_at = now;
+    } else if (!dwPressed && dw_held) {
+        unsigned long held_ms = now - dw_press_at;
+        dw_held = false;
+        if (held_ms >= 50 && now - dw_tm > 250) {
+            dwValid = true;
+            dw_tm = now;
+        } else if (held_ms < 50) {
+            bounce_counter++;
+            Serial.printf("DW button bounce (held=%lums, count=%d)\n", held_ms, bounce_counter);
+        }
+    }
+
+    // If too many bounces, clear inputs and wait
+    if (bounce_counter > 8) {
+        Serial.println("Too many button bounces detected, waiting 300ms");
+        delay(300);
+        bounce_counter = 0;
+        last_bounce_reset = millis();
+        // Clear all volatile flags
+        EscPress = false;
+        SelPress = false;
+        PrevPress = false;
+        NextPress = false;
+        UpPress = false;
+        DownPress = false;
+        AnyKeyPress = false;
+        return;
+    }
 
     bool anyPressed = upPressed || selPressed || dwPressed;
     if (anyPressed) tm = millis();
     if (anyPressed && wakeUpScreen()) return;
 
     AnyKeyPress = anyPressed;
-    PrevPress = upPressed;
-    EscPress = upPressed;
-    NextPress = dwPressed;
-    SelPress = selPressed;
+    PrevPress = upValid;
+    EscPress = upValid;
+    NextPress = dwValid;
+    SelPress = selValid;
 }
 
 /*********************************************************************

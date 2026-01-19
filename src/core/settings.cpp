@@ -1265,6 +1265,29 @@ void setGpsBaudrateMenu() {
     loopOptions(options, bruceConfig.gpsBaudrate);
 }
 
+void setGpsSourceMenu() {
+    options = {
+        {"Internal (TinyGPS++)",
+         [=]() { bruceConfig.setGpsSource(BruceConfig::GPS_SOURCE_LEGACY); },
+         bruceConfig.gpsSource == BruceConfig::GPS_SOURCE_LEGACY},
+        {"CASIC (UART)",
+         [=]() { bruceConfig.setGpsSource(BruceConfig::GPS_SOURCE_CASIC); },
+         bruceConfig.gpsSource == BruceConfig::GPS_SOURCE_CASIC}
+    };
+    loopOptions(options, bruceConfig.gpsSource);
+}
+
+void setGpsUpdateRateMenu() {
+    options = {
+        {"1 Hz (1000 ms)", [=]() { bruceConfig.setGpsUpdateRate(1000); }, bruceConfig.gpsUpdateRateMs == 1000},
+        {"2 Hz (500 ms)",  [=]() { bruceConfig.setGpsUpdateRate(500); },  bruceConfig.gpsUpdateRateMs == 500 },
+        {"4 Hz (250 ms)",  [=]() { bruceConfig.setGpsUpdateRate(250); },  bruceConfig.gpsUpdateRateMs == 250 },
+        {"5 Hz (200 ms)",  [=]() { bruceConfig.setGpsUpdateRate(200); },  bruceConfig.gpsUpdateRateMs == 200 },
+        {"10 Hz (100 ms)", [=]() { bruceConfig.setGpsUpdateRate(100); },  bruceConfig.gpsUpdateRateMs == 100 },
+    };
+    loopOptions(options, bruceConfig.gpsUpdateRateMs);
+}
+
 /*********************************************************************
 **  Function: setBleNameMenu
 **  Handles Menu to set BLE Gap Name

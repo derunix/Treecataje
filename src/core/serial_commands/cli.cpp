@@ -13,6 +13,7 @@
 #include "sound_commands.h"
 #include "storage_commands.h"
 #include "status_commands.h"
+#include "gps_commands.h"
 #include "util_commands.h"
 #include "wifi_commands.h"
 
@@ -43,6 +44,7 @@ void SerialCli::setup() {
     createSettingsCommands(&_cli);
     createStorageCommands(&_cli);
     createStatusCommands(&_cli);
+    createGpsCommands(&_cli);
     createUtilCommands(&_cli);
     createWifiCommands(&_cli);
 

@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pio run:*)",
+      "Bash(where:*)",
+      "Bash(/c/Users/derun/.platformio/packages/toolchain-xtensa-esp32s3/bin/xtensa-esp32s3-elf-g++.exe:*)",
+      "Bash(git add:*)"
+    ]
+  }
+}

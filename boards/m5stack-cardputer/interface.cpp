@@ -164,6 +164,8 @@ void _setBrightness(uint8_t brightval) {
 **********************************************************************/
 void InputHandler(void) {
     static unsigned long tm = 0;
+    static unsigned long last_event_time = 0;
+    static int bounce_counter = 0;
 
     static bool sel = false;
     static bool prev = false;
@@ -180,14 +182,26 @@ void InputHandler(void) {
     bool arrow_dw = false;
     bool arrow_ry = false;
     bool arrow_le = false;
-    if (millis() - tm < 200 && !LongPress) return;
+
+    // Increased debounce time from 200ms to 250ms for better stability
+    if (millis() - tm < 250 && !LongPress) return;
+
+    // Reset bounce counter every 2 seconds
+    if (millis() - last_event_time > 2000) {
+        bounce_counter = 0;
+    }
 
     if (digitalRead(0) == LOW) { // GPIO0 button, shoulder button
+        // Add debouncing for shoulder button
+        static unsigned long shoulder_tm = 0;
+        if (millis() - shoulder_tm < 250) return;
+        shoulder_tm = millis();
         tm = millis();
         if (!wakeUpScreen()) yield();
         else return;
         SelPress = true;
         AnyKeyPress = true;
+        last_event_time = millis();
     }
 
     if (UseTCA8418) {
@@ -228,6 +242,28 @@ void InputHandler(void) {
         // Serial.printf("Key event: raw=%d, pressed=%d, row=%d, col=%d\n", value, pressed, row, col);
 
         if (row >= 4 || col >= 14) return;
+
+        // Additional debouncing: check if same key pressed too quickly
+        static uint8_t last_row = 0xFF, last_col = 0xFF;
+        static unsigned long last_key_time = 0;
+        unsigned long now = millis();
+
+        if (pressed && row == last_row && col == last_col && now - last_key_time < 50) {
+            // Same key pressed within 50ms - likely bounce
+            bounce_counter++;
+            if (bounce_counter > 5) {
+                // Too many bounces, clear and wait
+                Serial.println("Keyboard bounce detected, clearing");
+                delay(100);
+                bounce_counter = 0;
+            }
+            return;
+        }
+
+        last_row = row;
+        last_col = col;
+        last_key_time = now;
+        last_event_time = now;
 
         if (wakeUpScreen()) return;
 

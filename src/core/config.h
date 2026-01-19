@@ -104,7 +104,10 @@ public:
     std::set<String> mifareKeys = {};
 
     // GPS
+    enum GPSSource { GPS_SOURCE_LEGACY = 0, GPS_SOURCE_CASIC = 1 };
+    int gpsSource = GPS_SOURCE_LEGACY;
     int gpsBaudrate = 9600;
+    int gpsUpdateRateMs = 1000;
 
     // Misc
     String startupApp = "";
@@ -219,6 +222,10 @@ public:
     // GPS
     void setGpsBaudrate(int value);
     void validateGpsBaudrateValue();
+    void setGpsSource(int value);
+    void validateGpsSourceValue();
+    void setGpsUpdateRate(int value);
+    void validateGpsUpdateRateValue();
 
     // Misc
     void setStartupApp(String value);
