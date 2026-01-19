@@ -14,6 +14,7 @@ struct themeFiles {
     String rfid = "";
     String fm = "";
     String radio = "";
+    String audio = "";
     String ir = "";
     String files = "";
     String gps = "";
@@ -26,6 +27,7 @@ struct themeFiles {
     String power = "";
     String boot_img = "";
     String boot_sound = "";
+    String lora = "";
 };
 
 struct themeInfo {
@@ -41,6 +43,7 @@ struct themeInfo {
     bool rfid = false;
     bool fm = false;
     bool radio = false;
+    bool audio = false;
     bool ir = false;
     bool files = false;
     bool gps = false;
@@ -53,7 +56,7 @@ struct themeInfo {
     bool power = false;
     bool boot_img = false;
     bool boot_sound = false;
-
+    bool lora = false;
     // Theme file paths, colors and border
     themeFiles paths;
 };
@@ -71,7 +74,7 @@ public:
     // UI Color
     void _setUiColor(uint16_t primary, uint16_t *secondary = nullptr, uint16_t *background = nullptr);
 
-    bool openThemeFile(FS *fs, String filepath);
+    bool openThemeFile(FS *fs, String filepath, bool overwriteConfigSettings);
     bool validateImgFile(FS *fs, String filepath);
     String getThemeItemImg(String item) {
         return themePath.substring(0, themePath.lastIndexOf('/')) + "/" + item;

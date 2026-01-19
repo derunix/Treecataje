@@ -8,6 +8,9 @@
 extern RotaryEncoder *encoder;
 IRAM_ATTR void checkPosition();
 
+// Forward declaration for input helper
+static void forceClearAllInputs();
+
 // Battery libs
 #if defined(T_EMBED_1101)
 // Power handler for battery detection
@@ -78,9 +81,10 @@ void _setup_gpio() {
     }
     if (bq.getDesignCap() != BATTERY_DESIGN_CAPACITY) { bq.setDesignCap(BATTERY_DESIGN_CAPACITY); }
     // Start with default IR, RF and RFID Configs, replace old
-    bruceConfig.rfModule = CC1101_SPI_MODULE;
-    bruceConfig.rfidModule = PN532_I2C_MODULE;
-    bruceConfig.irRx = 1;
+    // TODO: These fields were removed from BruceConfig - may need restoration if needed
+    // bruceConfig.rfModule = CC1101_SPI_MODULE;
+    // bruceConfig.rfidModule = PN532_I2C_MODULE;
+    // bruceConfig.irRx = 1;
 #else
     pinMode(BAT_PIN, INPUT); // Battery value
     Wire.begin(GROVE_SDA, GROVE_SCL);
@@ -169,17 +173,136 @@ IRAM_ATTR void checkPosition() {
 ** Handles the variables PrevPress, NextPress, SelPress, AnyKeyPress and EscPress
 **********************************************************************/
 void InputHandler(void) {
-    static unsigned long tm = millis();  // debauce for buttons
+    static unsigned long tm = millis();  // debounce for buttons - increased to 250ms
     static unsigned long tm2 = millis(); // delay between Select and encoder (avoid missclick)
+    static bool selHeld = false;
+    static unsigned long selPressedAt = 0;
+#ifdef T_EMBED_1101
+    static bool escHeld = false;
+    static unsigned long escPressedAt = 0;
+    static bool emergencyRebootCountdownShown = false;
+#endif
     static int _last_dir = 0;
+    static int _noise_counter = 0;
+    static unsigned long _last_noise_reset = 0;
+    const unsigned long now = millis();
+
+    // Track raw press/release timing to log hold durations.
+    const bool selRawPressed = digitalRead(SEL_BTN) == BTN_ACT;
+#ifdef T_EMBED_1101
+    const bool escRawPressed = digitalRead(BK_BTN) == BTN_ACT;
+#endif
+
+    // Anti-noise: reset counter every 2 seconds
+    if (now - _last_noise_reset > 2000) {
+        _noise_counter = 0;
+        _last_noise_reset = now;
+    }
+
+    if (selRawPressed && !selHeld) {
+        selHeld = true;
+        selPressedAt = now;
+    } else if (!selRawPressed && selHeld) {
+        const unsigned long heldMs = now - selPressedAt;
+        Serial.printf("Select button held for %lums\n", static_cast<unsigned long>(heldMs));
+        selHeld = false;
+        // Increased debounce time from 200ms to 300ms and require minimum 50ms hold
+        if (heldMs >= 50 && now - tm2 > 300) {
+            _last_dir = 0;
+            SelPress = true;
+            tm = now;
+        } else if (heldMs < 50) {
+            // Potential noise/bounce detected
+            _noise_counter++;
+            Serial.printf("Potential bounce detected (hold=%lums, count=%d)\n", heldMs, _noise_counter);
+        }
+    }
+
+#ifdef T_EMBED_1101
+    if (escRawPressed && !escHeld) {
+        escHeld = true;
+        escPressedAt = now;
+        emergencyRebootCountdownShown = false;
+    } else if (escRawPressed && escHeld) {
+        // ESC button is being held - check for emergency reboot
+        const unsigned long heldMs = now - escPressedAt;
+
+        // After 3 seconds, show countdown overlay
+        if (heldMs >= 3000 && !emergencyRebootCountdownShown) {
+            emergencyRebootCountdownShown = true;
+        }
+
+        // Show countdown if we're past 3 seconds
+        if (emergencyRebootCountdownShown) {
+            int remainingSeconds = 10 - (heldMs / 1000);
+            if (remainingSeconds < 0) remainingSeconds = 0;
+
+            // Draw countdown overlay
+            int overlayW = 180;
+            int overlayH = 80;
+            int overlayX = (tftWidth - overlayW) / 2;
+            int overlayY = (tftHeight - overlayH) / 2;
+
+            tft.fillRect(overlayX, overlayY, overlayW, overlayH, TFT_BLACK);
+            tft.drawRect(overlayX, overlayY, overlayW, overlayH, TFT_RED);
+            tft.drawRect(overlayX + 1, overlayY + 1, overlayW - 2, overlayH - 2, TFT_RED);
+
+            tft.setTextColor(TFT_RED, TFT_BLACK);
+            tft.setTextSize(FM);
+            tft.setCursor(overlayX + 20, overlayY + 15);
+            tft.println("EMERGENCY");
+            tft.setCursor(overlayX + 30, overlayY + 35);
+            tft.println("REBOOT");
+
+            tft.setTextSize(FM + 1);
+            tft.setCursor(overlayX + overlayW / 2 - 10, overlayY + 55);
+            tft.printf("%d", remainingSeconds);
+        }
+
+        // After 10 seconds, perform reboot
+        if (heldMs >= 10000) {
+            Serial.println("Emergency reboot triggered by 10-second ESC hold!");
+            tft.fillScreen(TFT_BLACK);
+            tft.setTextColor(TFT_WHITE, TFT_BLACK);
+            tft.setTextSize(FM);
+            tft.setCursor(20, tftHeight / 2 - 10);
+            tft.println("Rebooting...");
+            delay(500);
+            ESP.restart();
+        }
+    } else if (!escRawPressed && escHeld) {
+        const unsigned long heldMs = now - escPressedAt;
+        Serial.printf("Back button held for %lums\n", heldMs);
+        escHeld = false;
+        emergencyRebootCountdownShown = false;
+        // Require minimum 50ms hold for back button too
+        if (heldMs < 50) {
+            _noise_counter++;
+            Serial.printf("Back button bounce detected (hold=%lums, count=%d)\n", heldMs, _noise_counter);
+            return; // Ignore this press
+        }
+    }
+#endif
+
+    // If too many bounces detected (>10 in 2 seconds), ignore all inputs for 500ms
+    if (_noise_counter > 10) {
+        Serial.println("Too many bounces detected, ignoring inputs for 500ms");
+        delay(500);
+        _noise_counter = 0;
+        _last_noise_reset = now;
+        forceClearAllInputs();
+        return;
+    }
+
     bool sel = !BTN_ACT;
     bool esc = !BTN_ACT;
     _last_dir = (int)encoder->getDirection();
 
-    if (millis() - tm > 200 || LongPress) {
-        sel = digitalRead(SEL_BTN);
+    // Increased debounce from 200ms to 250ms
+    if (now - tm > 250 || LongPress) {
+        sel = selRawPressed ? BTN_ACT : !BTN_ACT;
 #ifdef T_EMBED_1101
-        esc = digitalRead(BK_BTN);
+        esc = escRawPressed ? BTN_ACT : !BTN_ACT;
 #endif
     }
     if (_last_dir != 0 || sel == BTN_ACT || esc == BTN_ACT) {
@@ -200,20 +323,27 @@ void InputHandler(void) {
 #ifdef HAS_ENCODER_LED
         EncoderLedChange = 1;
 #endif
-        tm2 = millis();
+        tm2 = now;
     }
 
-    if (sel == BTN_ACT && millis() - tm2 > 200) {
-        _last_dir = 0;
-        SelPress = true;
-        tm = millis();
-    }
     if (esc == BTN_ACT) {
         AnyKeyPress = true;
         EscPress = true;
         Serial.println("EscPressed");
-        tm = millis();
+        tm = now;
     }
+}
+
+// Helper function to clear all inputs - used after noisy events
+static void forceClearAllInputs() {
+    EscPress = false;
+    SelPress = false;
+    PrevPress = false;
+    NextPress = false;
+    UpPress = false;
+    DownPress = false;
+    AnyKeyPress = false;
+    SerialCmdPress = false;
 }
 
 void powerOff() {
@@ -236,7 +366,8 @@ void powerDownNFC() {
 }
 
 void powerDownCC1101() {
-    if (!initRfModule("rx", bruceConfig.rfFreq)) { Serial.println("Can't init CC1101"); }
+    // Use default frequency 433.92 MHz if rfFreq field not available
+    if (!initRfModule("rx", 433.92)) { Serial.println("Can't init CC1101"); }
 
     ELECHOUSE_cc1101.goSleep();
 }
@@ -256,4 +387,20 @@ bool isCharging() {
 }
 #else
 bool isCharging() { return false; }
+#endif
+
+/***************************************************************************************
+** Function name: getBatteryVoltage()
+** Description:   Returns the current battery voltage (in Volts) if supported
+***************************************************************************************/
+#ifdef USE_BQ27220_VIA_I2C
+float getBatteryVoltage() {
+    // Return voltage from BQ27220 in Volts (getVolt returns millivolts)
+    return bq.getVolt(VOLT) / 1000.0f;
+}
+#else
+float getBatteryVoltage() {
+    // TODO: Implement voltage reading for non-BQ27220 devices
+    return 0.0f;
+}
 #endif

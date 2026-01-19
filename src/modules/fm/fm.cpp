@@ -1,3 +1,4 @@
+#ifndef LITE_VERSION
 #include "fm.h"
 #include "core/utils.h"
 
@@ -143,6 +144,8 @@ void fm_options(uint16_t f_min, uint16_t f_max, bool reserved) {
 }
 
 void fm_live_run(bool reserved) {
+    // Test if FM is attached, if not, close menu
+    if (!fm_begin()) { return; }
     uint16_t f_min = 80;
     uint16_t f_max = 110;
     fm_banner();
@@ -156,7 +159,7 @@ void fm_live_run(bool reserved) {
     fm_options(f_min, f_max, reserved);
 
     // Run radio broadcast
-    if (!returnToMenu and fm_station != 0 and fm_setup()) {
+    if (!returnToMenu and fm_station != 0) {
         fm_setup(false, true); // Don't know why but IT WORKS ONLY when launched 2 times...
         while (!check(EscPress) && !check(SelPress)) { delay(100); }
     }
@@ -173,6 +176,8 @@ void fm_ta_run() {
 }
 
 void fm_spectrum() {
+    // Test if FM is attached, if not, close menu
+    if (!fm_begin()) { return; }
     uint16_t f_min = 80;
     uint16_t f_max = 110;
     int noise_level = 0;
@@ -303,3 +308,4 @@ void fm_stop() {
         is_running = false;
     }
 }
+#endif

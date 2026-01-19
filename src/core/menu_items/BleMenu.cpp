@@ -9,9 +9,14 @@
 
 void BleMenu::optionsMenu() {
     options.clear();
+
     if (BLEConnected) {
         options.push_back({"Disconnect", [=]() {
+#if defined(CONFIG_IDF_TARGET_ESP32C5)
+                               esp_bt_controller_deinit();
+#else
                                BLEDevice::deinit();
+#endif
                                BLEConnected = false;
                                delete hid_ble;
                                hid_ble = nullptr;
@@ -34,7 +39,9 @@ void BleMenu::optionsMenu() {
     options.push_back({"Android Spam", lambdaHelper(aj_adv, 4)});
     options.push_back({"Spam All", lambdaHelper(aj_adv, 5)});
     options.push_back({"Spam Custom", lambdaHelper(aj_adv, 6)});
+#if !defined(LITE_VERSION)
     options.push_back({"Ninebot", [=]() { BLENinebot(); }});
+#endif
     addOptionToMainMenu();
 
     loopOptions(options, MENU_TYPE_SUBMENU, "Bluetooth");

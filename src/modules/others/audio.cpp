@@ -1,51 +1,34 @@
 #include "audio.h"
+#include "core/mykeyboard.h"
+
+#if defined(HAS_NS4168_SPKR)
 #include "AudioFileSourceFunction.h"
-#include "AudioGeneratorMIDI.h"
-#include "AudioGeneratorWAV.h"
 #include "AudioGeneratorAAC.h"
 #include "AudioGeneratorFLAC.h"
+#include "AudioGeneratorMIDI.h"
+#include "AudioGeneratorWAV.h"
 #include "AudioOutputI2SNoDAC.h"
-#include "core/mykeyboard.h"
 #include <ESP8266Audio.h>
 #include <ESP8266SAM.h>
 
-#ifdef ESP32
-#include <esp_idf_version.h>
-#endif
-
-static bool configureI2SPinout(AudioOutputI2S *output) {
-#if defined(BCLK) && defined(WCLK) && defined(DOUT)
-#if defined(ESP_IDF_VERSION_MAJOR) && ESP_IDF_VERSION_MAJOR >= 5
-#ifdef MCLK
-    return output->SetPinout(BCLK, WCLK, DOUT, MCLK);
-#else
-    return output->SetPinout(BCLK, WCLK, DOUT);
-#endif
-#else
-    return output->SetPinout(BCLK, WCLK, DOUT);
-#endif
-#else
-    log_w("Skipping audio output configuration: I2S pins not defined");
-    return false;
-#endif
-}
-
-#if defined(HAS_NS4168_SPKR)
+void _setup_codec_speaker(bool enable) __attribute__((weak));
+void _setup_codec_speaker(bool enable) {}
 
 bool playAudioFile(FS *fs, String filepath) {
     if (!bruceConfig.soundEnabled) return false;
 
+    // Enable codec, if exists
+    _setup_codec_speaker(true);
+
     AudioFileSource *source = new AudioFileSourceFS(*fs, filepath.c_str());
     if (!source) return false;
 
-    AudioOutputI2S *audioout = new AudioOutputI2S();
-    if (!audioout || !configureI2SPinout(audioout)) {
-        delete audioout;
-        delete source;
-        return false;
-    }
+    AudioOutputI2S *audioout =
+        new AudioOutputI2S(); // https://github.com/earlephilhower/ESP8266Audio/blob/master/src/AudioOutputI2S.cpp#L32
+    audioout->SetPinout(BCLK, WCLK, DOUT, MCLK);
 
-    // set volume, derived from https://github.com/earlephilhower/ESP8266Audio/blob/master/examples/WebRadio/WebRadio.ino
+    // set volume, derived from
+    // https://github.com/earlephilhower/ESP8266Audio/blob/master/examples/WebRadio/WebRadio.ino
     audioout->SetGain(((float)bruceConfig.soundVolume) / 100.0);
 
     AudioGenerator *generator = NULL;
@@ -87,15 +70,20 @@ bool playAudioFile(FS *fs, String filepath) {
         delete generator;
         delete source;
         delete audioout;
-
+        // Disable codec, if exists
+        _setup_codec_speaker(false);
         return true;
     }
     // else
+    // Disable codec, if exists
+    _setup_codec_speaker(false);
     return false; // init error
 }
 
 bool playAudioRTTTLString(String song) {
     if (!bruceConfig.soundEnabled) return false;
+    // Enable codec, if exists
+    _setup_codec_speaker(true);
 
     // derived from
     // https://github.com/earlephilhower/ESP8266Audio/blob/master/examples/PlayRTTTLToI2SDAC/PlayRTTTLToI2SDAC.ino
@@ -104,10 +92,7 @@ bool playAudioRTTTLString(String song) {
     if (song == "") return false;
 
     AudioOutputI2S *audioout = new AudioOutputI2S();
-    if (!audioout || !configureI2SPinout(audioout)) {
-        delete audioout;
-        return false;
-    }
+    audioout->SetPinout(BCLK, WCLK, DOUT, MCLK);
 
     AudioGenerator *generator = new AudioGeneratorRTTTL();
 
@@ -126,30 +111,36 @@ bool playAudioRTTTLString(String song) {
         delete generator;
         delete source;
         delete audioout;
-
+        // Disable codec, if exists
+        _setup_codec_speaker(false);
         return true;
     }
     // else
+    // Disable codec, if exists
+    _setup_codec_speaker(false);
     return false; // init error
 }
 
 bool tts(String text) {
     if (!bruceConfig.soundEnabled) return false;
 
+    // Enable codec, if exists
+    _setup_codec_speaker(true);
+
     text.trim();
     if (text == "") return false;
 
     AudioOutputI2S *audioout = new AudioOutputI2S();
-    if (!audioout || !configureI2SPinout(audioout)) {
-        delete audioout;
-        return false;
-    }
+    audioout->SetPinout(BCLK, WCLK, DOUT, MCLK);
 
     // https://github.com/earlephilhower/ESP8266SAM/blob/master/examples/Speak/Speak.ino
     audioout->begin();
     ESP8266SAM *sam = new ESP8266SAM;
     sam->Say(audioout, text.c_str());
     delete sam;
+    delete audioout;
+    // Disable codec, if exists
+    _setup_codec_speaker(false);
     return true;
 }
 
@@ -162,6 +153,9 @@ bool isAudioFile(String filepath) {
 void playTone(unsigned int frequency, unsigned long duration, short waveType) {
     if (!bruceConfig.soundEnabled) return;
 
+    // Enable codec, if exists
+    _setup_codec_speaker(true);
+
     // derived from
     // https://github.com/earlephilhower/ESP8266Audio/blob/master/examples/PlayWAVFromFunction/PlayWAVFromFunction.ino
 
@@ -172,10 +166,7 @@ void playTone(unsigned int frequency, unsigned long duration, short waveType) {
     AudioGeneratorWAV *wav;
     AudioFileSourceFunction *file;
     AudioOutputI2S *out = new AudioOutputI2S();
-    if (!out || !configureI2SPinout(out)) {
-        delete out;
-        return;
-    }
+    out->SetPinout(BCLK, WCLK, DOUT, MCLK);
 
     file = new AudioFileSourceFunction(duration / 1000.0); // , 1, 44100
     //
@@ -220,6 +211,8 @@ void playTone(unsigned int frequency, unsigned long duration, short waveType) {
     delete file;
     delete wav;
     delete out;
+    // Disable codec, if exists
+    _setup_codec_speaker(false);
 }
 
 #endif

@@ -9,9 +9,10 @@
 #ifndef __WAR_DRIVING_H__
 #define __WAR_DRIVING_H__
 
-#include <TinyGPS++.h>
 #include <esp_wifi_types.h>
 #include <globals.h>
+#include "gps_provider.h"
+#include "gps_types.h"
 #include <set>
 
 class Wardriving {
@@ -35,10 +36,10 @@ private:
     double cur_lng;
     double distance = 0;
     String filename = "";
-    TinyGPSPlus gps;
-    HardwareSerial GPSserial = HardwareSerial(2); // Uses UART2 for GPS
+    gps_fix_t fix = {};
     std::set<String> registeredMACs;              // Store and track registered MAC
     int wifiNetworkCount = 0;                     // Counter fo wifi networks
+    bool rxPinReleased = false;
 
     /////////////////////////////////////////////////////////////////////////////////////
     // Setup
@@ -46,6 +47,8 @@ private:
     void begin_wifi(void);
     bool begin_gps(void);
     void end(void);
+    void releasePins(void);
+    void restorePins(void);
 
     /////////////////////////////////////////////////////////////////////////////////////
     // Display functions

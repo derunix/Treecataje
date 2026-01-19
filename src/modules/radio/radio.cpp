@@ -10,7 +10,8 @@
 #include <ESP8266WiFi.h>
 #else
 #include <WiFi.h>
-#include <driver/i2s.h>
+// Note: I2S driver is now handled by ESP8266Audio library (uses new driver API)
+// Removed: #include <driver/i2s.h>  // Legacy driver conflicts with new driver
 #endif
 
 namespace {
@@ -206,15 +207,36 @@ bool RadioPlayer::resolveStreamUrl(const RadioStation &station, String &resolved
     RADIO_LOGI("Resolving playlist url=%s mime=%s", resolvedUrl.c_str(), resolvedMime.c_str());
 
     HTTPClient http;
-    WiFiClientSecure secure;
-    WiFiClient plain;
+    WiFiClientSecure *secure = nullptr;
+    WiFiClient *plain = nullptr;
+    WiFiClient *cli = nullptr;
+
     bool secureMode = resolvedUrl.startsWith("https");
-    WiFiClient *cli = secureMode ? static_cast<WiFiClient *>(&secure) : &plain;
-    if (secureMode) secure.setInsecure();
+
+    if (secureMode) {
+        secure = new WiFiClientSecure();
+        if (!secure) {
+            addLog("Failed to allocate secure client");
+            return false;
+        }
+        secure->setInsecure();
+        cli = secure;
+    } else {
+        plain = new WiFiClient();
+        if (!plain) {
+            addLog("Failed to allocate client");
+            return false;
+        }
+        cli = plain;
+    }
+
     http.setFollowRedirects(HTTPC_FORCE_FOLLOW_REDIRECTS);
     http.setTimeout(6000);
+
     if (!http.begin(*cli, resolvedUrl)) {
         addLog("Playlist open failed");
+        if (secure) delete secure;
+        if (plain) delete plain;
         return false;
     }
 
@@ -222,11 +244,23 @@ bool RadioPlayer::resolveStreamUrl(const RadioStation &station, String &resolved
     if (code != HTTP_CODE_OK) {
         addLog("Playlist HTTP " + String(code));
         http.end();
+        if (secure) delete secure;
+        if (plain) delete plain;
         return false;
     }
 
     String body = http.getString();
     http.end();
+
+    // Free WiFi clients immediately after use
+    if (secure) {
+        delete secure;
+        secure = nullptr;
+    }
+    if (plain) {
+        delete plain;
+        plain = nullptr;
+    }
 
     String streamUrl;
     if (!parsePlaylist(body, streamUrl)) {
@@ -434,10 +468,11 @@ void RadioPlayer::resetAudioChain() {
     }
     if (_output) { _output->stop(); }
 #if !defined(ESP8266)
-    if (_i2sDriverReady) {
-        esp_err_t err = i2s_driver_uninstall((i2s_port_t)0);
-        if (err != ESP_OK) { RADIO_LOGW("i2s_driver_uninstall failed: %d", err); }
-    }
+    // Note: ESP8266Audio 2.4.1+ manages I2S driver internally, manual uninstall not needed
+    // if (_i2sDriverReady) {
+    //     esp_err_t err = i2s_driver_uninstall((i2s_port_t)0);
+    //     if (err != ESP_OK) { RADIO_LOGW("i2s_driver_uninstall failed: %d", err); }
+    // }
 #endif
     if (_output) {
         delete _output;
@@ -485,13 +520,25 @@ float RadioPlayer::bufferFillPct() const {
 }
 
 size_t RadioPlayer::computeBufferBytes(int bitrateKbps) const {
-    const int seconds = 5;
-    int kbps = bitrateKbps > 0 ? bitrateKbps : 128;
+    // Check if this is FLAC or high bitrate codec
+    bool isHighQuality = (_codec == "FLAC" || _mime.indexOf("flac") != -1);
+
+    // Significantly increased buffer time for smooth playback
+    const int seconds = isHighQuality ? 12 : 10; // Much more buffer time
+    int kbps = bitrateKbps > 0 ? bitrateKbps : (isHighQuality ? 800 : 128);
+
     size_t bytes = (size_t)((kbps * 1000 / 8) * seconds);
-    const size_t minBuf = 32 * 1024;
-    const size_t maxBuf = 192 * 1024;
+
+    // Much larger buffers for all streams - ESP32S3 has plenty of RAM
+    const size_t minBuf = isHighQuality ? 128 * 1024 : 64 * 1024;  // 2x increase
+    const size_t maxBuf = isHighQuality ? 384 * 1024 : 256 * 1024; // ~2x increase
+
     if (bytes < minBuf) bytes = minBuf;
     if (bytes > maxBuf) bytes = maxBuf;
+
+    RADIO_LOGI("Buffer computed: %u bytes (codec=%s, bitrate=%d, isHQ=%d)",
+               (unsigned)bytes, _codec.c_str(), bitrateKbps, isHighQuality);
+
     return bytes;
 }
 
@@ -604,9 +651,9 @@ void drawPlaybackScreen(const RadioStation &station, const RadioPlayer &player, 
         tft.drawString(nowPlaying.c_str(), 5, 105, 1);
     }
     
-    // Instructions
+    // Instructions - simplified
     tft.setTextColor(TFT_DARKGREY, bruceConfig.bgColor);
-    tft.drawCentreString("ESC: stop | Up/Down: volume", tftWidth / 2, tftHeight - 15, 1);
+    tft.drawCentreString("ESC: Stop | Prev/Next: Volume", tftWidth / 2, tftHeight - 15, 1);
 }
 
 void showPlayback(const RadioStation &station) {
@@ -619,7 +666,27 @@ void showPlayback(const RadioStation &station) {
         return;
     }
     RADIO_LOGI("Entered playback loop");
-    
+    unsigned long lastInputMs = 0;
+    unsigned long cooldownUntil = 0;
+    int noisyHits = 0;
+
+    auto debouncedPressed = [&](volatile bool &btn, uint32_t minGapMs = 250) -> bool {
+        if (!check(btn)) return false;
+        unsigned long now = millis();
+        if (now < cooldownUntil || (now - lastInputMs) < minGapMs) {
+            noisyHits++;
+            if (noisyHits > 4) {
+                cooldownUntil = now + 1200;
+                noisyHits = 0;
+            }
+            return false;
+        }
+        noisyHits = 0;
+        lastInputMs = now;
+        cooldownUntil = now + 400;
+        return true;
+    };
+
     // Clear any pending input - use aggressive clearing to prevent phantom presses
     clearInputsAndWait();
     delay(100); // Additional delay to ensure input is cleared
@@ -628,22 +695,22 @@ void showPlayback(const RadioStation &station) {
     unsigned long volumeDisplayTimeout = 0;
     int lastVolume = bruceConfig.soundVolume;
     bool volumeChanged = false;
-    
+
     // Main playback loop - using nrf_spectrum pattern: while (!check(EscPress))
-    while (!check(EscPress)) {
+    while (!debouncedPressed(EscPress)) {
         const unsigned long now = millis();
-        
-        // Handle volume control
-        bool volumeUp = check(UpPress) || check(PrevPress);   // Up button or encoder left/up
-        bool volumeDown = check(DownPress) || check(NextPress); // Down button or encoder right/down
-        
+
+        // Handle volume control - simplified to only Prev/Next
+        bool volumeUp = debouncedPressed(PrevPress, 120);
+        bool volumeDown = debouncedPressed(NextPress, 120);
+
         if (volumeUp || volumeDown) {
             int newVolume = bruceConfig.soundVolume;
             if (volumeUp) {
-                newVolume += 5;
+                newVolume += 3; // Smaller increment for finer control
                 if (newVolume > 100) newVolume = 100;
             } else {
-                newVolume -= 5;
+                newVolume -= 3; // Smaller decrement for finer control
                 if (newVolume < 0) newVolume = 0;
             }
             
@@ -701,45 +768,25 @@ void radioStopPlayback() {
 void radioStationsMenu();
 
 void radioMainMenu() {
-    // Check if we should ignore inputs (recently exited from playback)
+    // Single input ignore check
     if (shouldIgnoreInputs()) {
-        delay(100); // Wait a bit more if in ignore window
+        delay(150);
     }
-    
+
     options.clear();
     options.push_back({"Stations", radioStationsMenu});
 
-    if (playerInstance.current() && playerInstance.status() != RadioPlayerStatus::Idle) {
-        options.push_back({"Now playing", [=]() { 
-            showPlayback(*playerInstance.current());
-            // Mark exit and clear inputs after returning from playback
-            markRadioExit();
-            delay(50);
-        }});
-        options.push_back({"Stop playback", radioStopPlayback});
-    }
-
-    options.push_back({"Back", backToMenu});
+    // Simplified - just show stations directly, playback controls in player UI
     addOptionToMainMenu();
-    
-    // Additional protection: clear inputs one more time before entering loopOptions
-    // and wait to ensure InputHandler has processed everything
-    if (shouldIgnoreInputs()) {
-        delay(200); // Extended wait if in ignore window
-    } else {
-        clearInputsAndWait();
-        delay(100);
-    }
-    
+
     loopOptions(options, MENU_TYPE_SUBMENU, "Online Radio");
 }
 
 void radioStationsMenu() {
-    // Check if we should ignore inputs (recently exited from playback)
     if (shouldIgnoreInputs()) {
-        delay(100); // Wait a bit more if in ignore window
+        delay(150);
     }
-    
+
     std::vector<RadioStation> stations;
     String err;
     if (!loadRadioStations(stations, err)) {
@@ -755,27 +802,15 @@ void radioStationsMenu() {
 
     options.clear();
     for (const auto &station : stations) {
-        // Capture station by value in lambda to avoid reference issues
         RadioStation stationCopy = station;
-        options.push_back({station.name, [stationCopy]() { 
+        options.push_back({station.name, [stationCopy]() {
             showPlayback(stationCopy);
-            // Mark exit and clear inputs after returning from playback
             markRadioExit();
             delay(50);
         }});
     }
-    options.push_back({"Back", radioMainMenu});
     addOptionToMainMenu();
-    
-    // Additional protection: clear inputs one more time before entering loopOptions
-    // and wait to ensure InputHandler has processed everything
-    if (shouldIgnoreInputs()) {
-        delay(200); // Extended wait if in ignore window
-    } else {
-        clearInputsAndWait();
-        delay(100);
-    }
-    
+
     loopOptions(options, MENU_TYPE_SUBMENU, "Stations");
 }
 

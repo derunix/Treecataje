@@ -102,7 +102,7 @@ def _merge_bins_callback(target, source, env):
         q(python_exe),
         q(esptool_py),
         "--chip", chip_arg,
-        "merge_bin",
+        "merge-bin",
         "--output", q(out_bin),
         hex(boot_offset), q(boot_bin),
         hex(PART_TABLE_OFFSET), q(part_bin),

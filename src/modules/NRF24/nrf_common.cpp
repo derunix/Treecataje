@@ -3,6 +3,7 @@
 
 RF24 NRFradio(NRF24_CE_PIN, NRF24_SS_PIN);
 SPIClass *NRFSPI;
+HardwareSerial NRFSerial(2); // UART2 for external NRF24 modules
 
 void nrf_info() {
     tft.fillScreen(bruceConfig.bgColor);
@@ -25,7 +26,22 @@ void nrf_info() {
     while (!check(AnyKeyPress));
 }
 
-bool nrf_start() {
+bool nrf_start(NRF24_MODE mode) {
+    // Note: mode parameter added for compatibility with upstream
+    // Currently only SPI mode is implemented
+    if (mode != NRF_MODE_SPI) {
+        Serial.printf("[NRF24] Warning: Only SPI mode supported, requested mode=%d\n", mode);
+    }
+
+    // Validate pins before use
+    if (bruceConfigPins.NRF24_bus.cs == GPIO_NUM_NC || bruceConfigPins.NRF24_bus.io0 == GPIO_NUM_NC) {
+        Serial.println("[NRF24] Error: CS or CE pin not configured");
+        return false;
+    }
+
+    Serial.printf("[NRF24] Initializing with CE=%d, CS=%d, mode=%d\n",
+                  bruceConfigPins.NRF24_bus.io0, bruceConfigPins.NRF24_bus.cs, mode);
+
     pinMode(bruceConfigPins.NRF24_bus.cs, OUTPUT);
     digitalWrite(bruceConfigPins.NRF24_bus.cs, HIGH);
     pinMode(bruceConfigPins.NRF24_bus.io0, OUTPUT);
@@ -35,35 +51,62 @@ bool nrf_start() {
         bruceConfigPins.NRF24_bus.mosi != GPIO_NUM_NC) { // (T_EMBED), CORE2 and others
 #if TFT_MOSI > 0 // condition for Headless and 8bit displays (no SPI bus)
         NRFSPI = &tft.getSPIinstance();
+        Serial.println("[NRF24] Using TFT SPI bus");
 #else
         NRFSPI = &SPI;
+        Serial.println("[NRF24] Using default SPI bus");
 #endif
 
     } else if (bruceConfigPins.NRF24_bus.mosi == bruceConfigPins.SDCARD_bus.mosi) {
-        // CC1101 shares SPI with SDCard (Cardputer and CYDs)
-
+        // NRF24 shares SPI with SDCard (Cardputer and CYDs)
         NRFSPI = &sdcardSPI;
+        Serial.println("[NRF24] Using SD Card SPI bus");
     } else if (bruceConfigPins.NRF24_bus.mosi == bruceConfigPins.CC1101_bus.mosi &&
                bruceConfigPins.NRF24_bus.mosi != bruceConfigPins.SDCARD_bus.mosi) {
-        // Smoochie board shares CC1101 and NRF24 SPI bus with different CS pins at
-        // the same time, different from StickCs that uses the same Bus, but one at a
-        // time (same CS Pin)
+        // Smoochie board shares CC1101 and NRF24 SPI bus with different CS pins
         NRFSPI = &CC_NRF_SPI;
+        Serial.println("[NRF24] Using CC1101/NRF24 shared SPI bus");
     } else {
         NRFSPI = &SPI;
+        Serial.println("[NRF24] Using default SPI bus");
     }
+
+    // Initialize SPI bus
     NRFSPI->begin(
         (int8_t)bruceConfigPins.NRF24_bus.sck,
         (int8_t)bruceConfigPins.NRF24_bus.miso,
         (int8_t)bruceConfigPins.NRF24_bus.mosi
     );
+    Serial.printf("[NRF24] SPI init: SCK=%d, MISO=%d, MOSI=%d\n",
+                  bruceConfigPins.NRF24_bus.sck,
+                  bruceConfigPins.NRF24_bus.miso,
+                  bruceConfigPins.NRF24_bus.mosi);
     delay(10);
 
-    if (NRFradio.begin(
-            NRFSPI,
-            rf24_gpio_pin_t(bruceConfigPins.NRF24_bus.io0),
-            rf24_gpio_pin_t(bruceConfigPins.NRF24_bus.cs)
-        )) {
-        return true;
-    } else return false;
+    // Initialize NRF24 radio with CE and CS pins
+    bool result = NRFradio.begin(
+        NRFSPI,
+        rf24_gpio_pin_t(bruceConfigPins.NRF24_bus.io0),  // CE pin
+        rf24_gpio_pin_t(bruceConfigPins.NRF24_bus.cs)    // CS pin
+    );
+
+    if (result) {
+        Serial.println("[NRF24] Radio initialized");
+        // Test if radio is responding
+        if (!NRFradio.isChipConnected()) {
+            Serial.println("[NRF24] WARNING: Chip not responding!");
+            return false;
+        }
+        Serial.println("[NRF24] Chip connected");
+    } else {
+        Serial.println("[NRF24] ERROR: Init failed");
+    }
+
+    return result;
+}
+
+NRF24_MODE nrf_setMode() {
+    // TODO: Implement mode selection UI for SPI vs UART
+    // For now, always return SPI mode
+    return NRF_MODE_SPI;
 }

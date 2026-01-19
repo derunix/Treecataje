@@ -5,6 +5,7 @@
 #include "gpio_commands.h"
 #include "interpreter_commands.h"
 #include "ir_commands.h"
+#include "nrf_commands.h"
 #include "power_commands.h"
 #include "rf_commands.h"
 #include "screen_commands.h"
@@ -12,19 +13,21 @@
 #include "sound_commands.h"
 #include "storage_commands.h"
 #include "status_commands.h"
+#include "gps_commands.h"
 #include "util_commands.h"
 #include "wifi_commands.h"
+#include <globals.h>
 
 void cliErrorCallback(cmd_error *e) {
     CommandError cmdError(e); // Create wrapper object
 
-    Serial.print("ERROR: ");
-    Serial.println(cmdError.toString());
+    serialDevice->print("ERROR: ");
+    serialDevice->println(cmdError.toString());
 
     if (cmdError.hasCommand()) {
-        Serial.print("Did you mean \"");
-        Serial.print(cmdError.getCommand().toString());
-        Serial.println("\"?");
+        serialDevice->print("Did you mean \"");
+        serialDevice->print(cmdError.getCommand().toString());
+        serialDevice->println("\"?");
     }
 }
 
@@ -36,11 +39,13 @@ void SerialCli::setup() {
     createCryptoCommands(&_cli);
     createGpioCommands(&_cli);
     createIrCommands(&_cli);
+    createNrfCommands(&_cli);
     createPowerCommands(&_cli);
     createRfCommands(&_cli);
     createSettingsCommands(&_cli);
     createStorageCommands(&_cli);
     createStatusCommands(&_cli);
+    createGpsCommands(&_cli);
     createUtilCommands(&_cli);
     createWifiCommands(&_cli);
 

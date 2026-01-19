@@ -4,6 +4,7 @@
 #include "config.h"
 #include "configPins.h"
 #include <NTPClient.h>
+#include <globals.h>
 
 void _setBrightness(uint8_t brightval) __attribute__((weak));
 
@@ -35,6 +36,18 @@ void addEvilWifiMenu();
 
 void removeEvilWifiMenu();
 
+void setEvilEndpointCreds();
+
+void setEvilEndpointSsid();
+
+void setEvilAllowEndpointDisplay();
+
+void setEvilAllowGetCreds();
+
+void setEvilAllowSetSsid();
+
+void setEvilPasswordMode();
+
 void setRFModuleMenu();
 
 void setRFFreqMenu();
@@ -46,12 +59,6 @@ void addMifareKeyMenu();
 void setSleepMode();
 
 void setDimmerTimeMenu();
-void setScreenOffTimeoutMenu();
-void setAutoSleepTimeoutMenu();
-void setAutoDeepSleepTimeoutMenu();
-void setBatteryLogIntervalMenu();
-void setPowerProfileMenu();
-const char *powerModeName(int mode);
 
 void setClock();
 
@@ -73,7 +80,9 @@ void setSoundConfig();
 
 void setSoundVolume();
 
+#ifdef HAS_RGB_LED
 void setLedBlinkConfig();
+#endif
 
 void setWifiStartupConfig();
 
@@ -82,6 +91,10 @@ void setStartupApp();
 void setGpsBaudrateMenu();
 
 void setNetworkCredsMenu();
+
+void setBadUSBBLEMenu();
+void setBadUSBBLEKeyboardLayoutMenu();
+void setBadUSBBLEKeyDelayMenu();
 
 void setSPIPinsMenu(BruceConfigPins::SPIPins &value);
 
@@ -93,8 +106,6 @@ void setTheme();
 
 void setMacAddressMenu();
 
-void showBatteryLogText();
-void showBatteryLogGraph();
-void deleteBatteryLogFileMenu();
+void enableBLEAPI();
 
 #endif

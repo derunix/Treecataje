@@ -12,6 +12,13 @@ public:
     void drawIcon(float scale);
     void drawIconImg();
     bool getTheme() { return bruceConfig.theme.nrf; }
+
+private:
+    void spectrumMenu(void);
+    void jammerMenu(void);
+    void hijackMenu(void);
+    void carrierJammerMenu(void);
+    void randomDataMenu(void);
 };
 
 #endif

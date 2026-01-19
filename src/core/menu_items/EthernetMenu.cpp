@@ -1,4 +1,3 @@
-
 #include "EthernetMenu.h"
 #if !defined(LITE_VERSION)
 #include "core/display.h"
@@ -11,40 +10,61 @@
 
 void EthernetMenu::start_ethernet() {
     eth = new EthernetHelper();
-    while (!eth->is_connected()) { delay(100); }
+    if (!eth->setup()) {
+        displayError("W5500 not found");
+        delete eth;
+        eth = nullptr;
+        return;
+    }
+    while (!eth->is_connected()) { vTaskDelay(pdMS_TO_TICKS(20)); }
 }
 
 void EthernetMenu::optionsMenu() {
     options = {
         {"Scan Hosts",
-         [=]() {
+         [this]() {
              start_ethernet();
-             run_arp_scanner();
-             eth->stop();
-         }},
+             if (eth != nullptr) {
+                 run_arp_scanner();
+                 eth->stop();
+             } else {
+                    displayError("W5500 not found");
+             }
+         }                        },
         {"DHCP Starvation",
-         [=]() {
+         [this]() {
              start_ethernet();
-             DHCPStarvation();
-             eth->stop();
-         }},
-        {"MAC Flooding",
-         [=]() {
+             if (eth != nullptr) {
+                 DHCPStarvation();
+                 eth->stop();
+             } else {
+                    displayError("W5500 not found");
+             }
+         }                        },
+        {"MAC Flooding",    [this]() {
              start_ethernet();
-             MACFlooding();
-             eth->stop();
+             if (eth != nullptr) {
+                 MACFlooding();
+                 eth->stop();
+             } else {
+                    displayError("W5500 not found");
+             }
          }}
     };
     addOptionToMainMenu();
 
-    delay(200);
+    vTaskDelay(pdMS_TO_TICKS(200));
 
     loopOptions(options, MENU_TYPE_SUBMENU, "Ethernet");
 }
 
 void EthernetMenu::drawIconImg() {
     drawImg(
-        *bruceConfig.themeFS(), bruceConfig.getThemeItemImg(bruceConfig.theme.paths.rfid), 0, imgCenterY, true
+        *bruceConfig.themeFS(),
+        bruceConfig.getThemeItemImg(bruceConfig.theme.paths.ethernet),
+        0,
+        imgCenterY,
+        true
     );
 }
 void EthernetMenu::drawIcon(float scale) {

@@ -2,6 +2,7 @@
 
 #include "core/batteryLogger.h"
 #include "core/systemStatus.h"
+#include "modules/gps/gps_casic.h"
 #include <globals.h>
 
 uint32_t statusCallback(cmd *c) {
@@ -25,4 +26,22 @@ uint32_t statusCallback(cmd *c) {
     return true;
 }
 
-void createStatusCommands(SimpleCLI *cli) { cli->addCommand("status", statusCallback); }
+uint32_t gpsMonCallback(cmd *c) {
+    Command cmd(c);
+    bool enable = gps_casic_status_log_enabled();
+    if (cmd.countArgs() > 0) {
+        String arg = cmd.getArg(0).getValue();
+        arg.toLowerCase();
+        if (arg == "on" || arg == "1" || arg == "true") enable = true;
+        else if (arg == "off" || arg == "0" || arg == "false") enable = false;
+    }
+    gps_casic_enable_status_log(enable);
+    Serial.printf("gpsmon: logging %s\n", enable ? "ON" : "OFF");
+    return true;
+}
+
+void createStatusCommands(SimpleCLI *cli) {
+    cli->addCommand("status", statusCallback);
+    Command cmd = cli->addCommand("gpsmon", gpsMonCallback);
+    cmd.addArg("state");
+}

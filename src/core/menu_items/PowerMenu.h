@@ -7,10 +7,10 @@ class PowerMenu : public MenuItemInterface {
 public:
     PowerMenu() : MenuItemInterface("Power") {}
 
-    void optionsMenu(void) override;
-    void drawIcon(float scale = 1) override;
-    void drawIconImg() override;
-    bool getTheme() override { return bruceConfig.theme.power; }
+    void optionsMenu(void);
+    void drawIcon(float scale);
+    void drawIconImg();
+    bool getTheme() { return bruceConfig.theme.others; } // Use Others theme for now
 };
 
 #endif
