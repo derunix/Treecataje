@@ -3,6 +3,8 @@
 #include "core/mykeyboard.h"
 #include "nrf_common.h"
 #include <globals.h>
+#include <vector>
+#include <algorithm>
 
 void nrf_jammer() {
     int OnX = 0;
@@ -390,7 +392,122 @@ void nrf_channel_hopper() {
 }
 
 void nrf_jammer_pro() {
-    // TODO: Implement advanced jammer functionality
-    displayError("Not implemented yet");
-    delay(2000);
+    NRF24_MODE mode = nrf_setMode();
+    if (!nrf_start(mode)) {
+        displayError("NRF24 Init Failed");
+        delay(2000);
+        return;
+    }
+
+    // Advanced jammer with adaptive channel selection
+    struct ChannelStats {
+        uint8_t channel;
+        uint32_t activity;
+        uint32_t lastSeen;
+    };
+
+    std::vector<ChannelStats> hotChannels;
+
+    drawMainBorder();
+    tft.setCursor(10, 20);
+    tft.setTextSize(FM);
+    tft.println("NRF24 Pro Jammer");
+    tft.setTextSize(FP);
+    tft.println("Scanning for active channels...");
+
+    // Phase 1: Scan for active channels (10 seconds)
+    NRFradio.setAutoAck(false);
+    NRFradio.disableCRC();
+    NRFradio.setDataRate(RF24_2MBPS);
+    NRFradio.setPALevel(RF24_PA_MAX);
+    NRFradio.startListening();
+
+    uint32_t scanEnd = millis() + 10000;
+    uint8_t scanCh = 1;
+
+    while (millis() < scanEnd && !check(EscPress)) {
+        NRFradio.setChannel(scanCh);
+        delay(20);
+
+        if (NRFradio.testRPD() || NRFradio.available()) {
+            // Found activity on this channel
+            auto it = std::find_if(hotChannels.begin(), hotChannels.end(),
+                [scanCh](const ChannelStats &c) { return c.channel == scanCh; });
+
+            if (it != hotChannels.end()) {
+                it->activity++;
+                it->lastSeen = millis();
+            } else {
+                hotChannels.push_back({scanCh, 1, millis()});
+            }
+
+            NRFradio.flush_rx();
+        }
+
+        scanCh = (scanCh >= 125) ? 1 : scanCh + 1;
+    }
+
+    NRFradio.stopListening();
+
+    if (check(EscPress)) return;
+
+    // Sort by activity
+    std::sort(hotChannels.begin(), hotChannels.end(),
+        [](const ChannelStats &a, const ChannelStats &b) { return a.activity > b.activity; });
+
+    // Phase 2: Adaptive jamming on hot channels
+    drawMainBorder();
+    tft.setCursor(10, 20);
+    tft.setTextSize(FM);
+    tft.println("NRF24 Pro Jammer");
+    tft.setTextSize(FP);
+
+    if (hotChannels.empty()) {
+        tft.println("No active channels found");
+        tft.println("Jamming full spectrum...");
+
+        // Fallback to full spectrum jam
+        byte full_channels[] = {1, 2, 7, 12, 17, 22, 27, 32, 37, 42, 47, 52, 57, 62, 67, 72, 77, 82};
+        NRFradio.stopConstCarrier();
+
+        while (!check(EscPress)) {
+            for (byte ch : full_channels) {
+                if (check(EscPress)) break;
+                NRFradio.setChannel(ch);
+                NRFradio.startConstCarrier(RF24_PA_MAX, ch);
+                delayMicroseconds(200);
+            }
+        }
+    } else {
+        tft.printf("Jamming %d hot channels\n", hotChannels.size());
+        tft.println("ESC to stop");
+
+        int y = 60;
+        int shown = 0;
+        for (const auto &ch : hotChannels) {
+            if (shown++ >= 8) break;
+            tft.setCursor(10, y);
+            tft.printf("CH %3d: %lu hits", ch.channel, ch.activity);
+            y += 12;
+        }
+
+        // Jam hot channels with emphasis on most active
+        while (!check(EscPress)) {
+            for (size_t i = 0; i < hotChannels.size() && i < 20; ++i) {
+                if (check(EscPress)) break;
+
+                uint8_t ch = hotChannels[i].channel;
+                NRFradio.setChannel(ch);
+                NRFradio.startConstCarrier(RF24_PA_MAX, ch);
+
+                // Dwell longer on more active channels
+                uint32_t dwellTime = 100 + (hotChannels[i].activity * 10);
+                if (dwellTime > 1000) dwellTime = 1000;
+                delayMicroseconds(dwellTime);
+            }
+        }
+    }
+
+    NRFradio.stopConstCarrier();
+    if (CHECK_NRF_UART(mode)) NRFSerial.println("OFF");
 }

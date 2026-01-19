@@ -180,6 +180,7 @@ void InputHandler(void) {
 #ifdef T_EMBED_1101
     static bool escHeld = false;
     static unsigned long escPressedAt = 0;
+    static bool emergencyRebootCountdownShown = false;
 #endif
     static int _last_dir = 0;
     static int _noise_counter = 0;
@@ -221,10 +222,59 @@ void InputHandler(void) {
     if (escRawPressed && !escHeld) {
         escHeld = true;
         escPressedAt = now;
+        emergencyRebootCountdownShown = false;
+    } else if (escRawPressed && escHeld) {
+        // ESC button is being held - check for emergency reboot
+        const unsigned long heldMs = now - escPressedAt;
+
+        // After 3 seconds, show countdown overlay
+        if (heldMs >= 3000 && !emergencyRebootCountdownShown) {
+            emergencyRebootCountdownShown = true;
+        }
+
+        // Show countdown if we're past 3 seconds
+        if (emergencyRebootCountdownShown) {
+            int remainingSeconds = 10 - (heldMs / 1000);
+            if (remainingSeconds < 0) remainingSeconds = 0;
+
+            // Draw countdown overlay
+            int overlayW = 180;
+            int overlayH = 80;
+            int overlayX = (tftWidth - overlayW) / 2;
+            int overlayY = (tftHeight - overlayH) / 2;
+
+            tft.fillRect(overlayX, overlayY, overlayW, overlayH, TFT_BLACK);
+            tft.drawRect(overlayX, overlayY, overlayW, overlayH, TFT_RED);
+            tft.drawRect(overlayX + 1, overlayY + 1, overlayW - 2, overlayH - 2, TFT_RED);
+
+            tft.setTextColor(TFT_RED, TFT_BLACK);
+            tft.setTextSize(FM);
+            tft.setCursor(overlayX + 20, overlayY + 15);
+            tft.println("EMERGENCY");
+            tft.setCursor(overlayX + 30, overlayY + 35);
+            tft.println("REBOOT");
+
+            tft.setTextSize(FM + 1);
+            tft.setCursor(overlayX + overlayW / 2 - 10, overlayY + 55);
+            tft.printf("%d", remainingSeconds);
+        }
+
+        // After 10 seconds, perform reboot
+        if (heldMs >= 10000) {
+            Serial.println("Emergency reboot triggered by 10-second ESC hold!");
+            tft.fillScreen(TFT_BLACK);
+            tft.setTextColor(TFT_WHITE, TFT_BLACK);
+            tft.setTextSize(FM);
+            tft.setCursor(20, tftHeight / 2 - 10);
+            tft.println("Rebooting...");
+            delay(500);
+            ESP.restart();
+        }
     } else if (!escRawPressed && escHeld) {
         const unsigned long heldMs = now - escPressedAt;
         Serial.printf("Back button held for %lums\n", heldMs);
         escHeld = false;
+        emergencyRebootCountdownShown = false;
         // Require minimum 50ms hold for back button too
         if (heldMs < 50) {
             _noise_counter++;

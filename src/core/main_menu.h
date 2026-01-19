@@ -19,6 +19,8 @@
 #include "menu_items/RFMenu.h"
 #include "menu_items/ScriptsMenu.h"
 #include "menu_items/WifiMenu.h"
+#include "menu_items/RadioMenu.h"
+#include "menu_items/PowerMenu.h"
 class MainMenu {
 public:
     FileMenu fileMenu;
@@ -35,6 +37,8 @@ public:
     RFMenu rfMenu;
     ScriptsMenu scriptsMenu;
     WifiMenu wifiMenu;
+    RadioMenu radioMenu;
+    PowerMenu powerMenu;
 #if !defined(LITE_VERSION)
     LoRaMenu loraMenu;
     EthernetMenu ethernetMenu;

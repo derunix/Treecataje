@@ -207,15 +207,36 @@ bool RadioPlayer::resolveStreamUrl(const RadioStation &station, String &resolved
     RADIO_LOGI("Resolving playlist url=%s mime=%s", resolvedUrl.c_str(), resolvedMime.c_str());
 
     HTTPClient http;
-    WiFiClientSecure secure;
-    WiFiClient plain;
+    WiFiClientSecure *secure = nullptr;
+    WiFiClient *plain = nullptr;
+    WiFiClient *cli = nullptr;
+
     bool secureMode = resolvedUrl.startsWith("https");
-    WiFiClient *cli = secureMode ? static_cast<WiFiClient *>(&secure) : &plain;
-    if (secureMode) secure.setInsecure();
+
+    if (secureMode) {
+        secure = new WiFiClientSecure();
+        if (!secure) {
+            addLog("Failed to allocate secure client");
+            return false;
+        }
+        secure->setInsecure();
+        cli = secure;
+    } else {
+        plain = new WiFiClient();
+        if (!plain) {
+            addLog("Failed to allocate client");
+            return false;
+        }
+        cli = plain;
+    }
+
     http.setFollowRedirects(HTTPC_FORCE_FOLLOW_REDIRECTS);
     http.setTimeout(6000);
+
     if (!http.begin(*cli, resolvedUrl)) {
         addLog("Playlist open failed");
+        if (secure) delete secure;
+        if (plain) delete plain;
         return false;
     }
 
@@ -223,11 +244,23 @@ bool RadioPlayer::resolveStreamUrl(const RadioStation &station, String &resolved
     if (code != HTTP_CODE_OK) {
         addLog("Playlist HTTP " + String(code));
         http.end();
+        if (secure) delete secure;
+        if (plain) delete plain;
         return false;
     }
 
     String body = http.getString();
     http.end();
+
+    // Free WiFi clients immediately after use
+    if (secure) {
+        delete secure;
+        secure = nullptr;
+    }
+    if (plain) {
+        delete plain;
+        plain = nullptr;
+    }
 
     String streamUrl;
     if (!parsePlaylist(body, streamUrl)) {
@@ -487,13 +520,25 @@ float RadioPlayer::bufferFillPct() const {
 }
 
 size_t RadioPlayer::computeBufferBytes(int bitrateKbps) const {
-    const int seconds = 5;
-    int kbps = bitrateKbps > 0 ? bitrateKbps : 128;
+    // Check if this is FLAC or high bitrate codec
+    bool isHighQuality = (_codec == "FLAC" || _mime.indexOf("flac") != -1);
+
+    // Significantly increased buffer time for smooth playback
+    const int seconds = isHighQuality ? 12 : 10; // Much more buffer time
+    int kbps = bitrateKbps > 0 ? bitrateKbps : (isHighQuality ? 800 : 128);
+
     size_t bytes = (size_t)((kbps * 1000 / 8) * seconds);
-    const size_t minBuf = 32 * 1024;
-    const size_t maxBuf = 192 * 1024;
+
+    // Much larger buffers for all streams - ESP32S3 has plenty of RAM
+    const size_t minBuf = isHighQuality ? 128 * 1024 : 64 * 1024;  // 2x increase
+    const size_t maxBuf = isHighQuality ? 384 * 1024 : 256 * 1024; // ~2x increase
+
     if (bytes < minBuf) bytes = minBuf;
     if (bytes > maxBuf) bytes = maxBuf;
+
+    RADIO_LOGI("Buffer computed: %u bytes (codec=%s, bitrate=%d, isHQ=%d)",
+               (unsigned)bytes, _codec.c_str(), bitrateKbps, isHighQuality);
+
     return bytes;
 }
 

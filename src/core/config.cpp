@@ -574,7 +574,11 @@ void BruceConfig::setLedEffect(int value) {
 }
 
 void BruceConfig::validateLedEffectValue() {
-    if (ledEffect < 0 || ledEffect > 5) ledEffect = 0;
+    int maxEffect = 5;
+#ifdef HAS_ENCODER_LED
+    maxEffect = 7;
+#endif
+    if (ledEffect < 0 || ledEffect > maxEffect) ledEffect = 0;
 }
 
 void BruceConfig::setLedEffectSpeed(int value) {

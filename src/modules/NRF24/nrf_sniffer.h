@@ -24,3 +24,6 @@ void nrf_sniffer();
 
 // Headless collector: scan the band and return the list of seen addresses.
 std::vector<NrfSniffedDevice> nrf_sniffer_collect(uint32_t scanTimeMs = 3000, uint16_t dwellPerChannelMs = 20);
+
+// Packet analyzer with logging - captures packets, decodes HID actions, logs to SD card
+void nrf_packet_analyzer();

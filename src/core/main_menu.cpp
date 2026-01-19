@@ -26,11 +26,13 @@ MainMenu::MainMenu() {
         &loraMenu,
 #endif
         &othersMenu,
+        &radioMenu,
         &clockMenu,
 #if !defined(LITE_VERSION)
         &connectMenu,
 #endif
         &configMenu,
+        &powerMenu,
     };
 
     _totalItems = _menuItems.size();

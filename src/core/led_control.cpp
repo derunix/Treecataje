@@ -184,6 +184,33 @@ void ledEffectTask(void *pvParameters) {
             }
             frame++;
 #endif
+        } else if (ledEffect == LED_EFFECT_ENCODER_RUNNER) {
+            // Encoder-triggered runner - single LED moves with encoder clicks
+#ifdef HAS_ENCODER_LED
+            // Always show current LED even without encoder change
+            fill_solid(leds, LED_COUNT, CRGB::Black);
+            leds[currentLED] = baseColor;
+
+            if (EncoderLedChange != 0) {
+                currentLED = (currentLED + EncoderLedChange + LED_COUNT) % LED_COUNT;
+                EncoderLedChange = 0;
+            }
+#endif
+        } else if (ledEffect == LED_EFFECT_ENCODER_RAINBOW) {
+            // Encoder-triggered rainbow runner - LED cycles through rainbow colors
+#ifdef HAS_ENCODER_LED
+            // Calculate hue based on current position
+            short hue = (currentLED * 360 / LED_COUNT) % 360;
+
+            // Always show current LED even without encoder change
+            fill_solid(leds, LED_COUNT, CRGB::Black);
+            leds[currentLED] = hsvToRgb(hue, 255, 255);
+
+            if (EncoderLedChange != 0) {
+                currentLED = (currentLED + EncoderLedChange + LED_COUNT) % LED_COUNT;
+                EncoderLedChange = 0;
+            }
+#endif
         }
 
         FastLED.show();
@@ -491,6 +518,22 @@ void setLedEffectConfig() {
                  setLedEffect(LED_EFFECT_CHASE_TAIL);
                  return false;
              }                                                                    },
+#ifdef HAS_ENCODER_LED
+            {"Encoder Runner",
+             [=]() { bruceConfig.setLedEffect(LED_EFFECT_ENCODER_RUNNER); },
+             bruceConfig.ledEffect == LED_EFFECT_ENCODER_RUNNER,
+             [](void *pointer,                                                                     bool shouldRender) {
+                 setLedEffect(LED_EFFECT_ENCODER_RUNNER);
+                 return false;
+             }                                                                    },
+            {"Encoder Rainbow",
+             [=]() { bruceConfig.setLedEffect(LED_EFFECT_ENCODER_RAINBOW); },
+             bruceConfig.ledEffect == LED_EFFECT_ENCODER_RAINBOW,
+             [](void *pointer,                                                                     bool shouldRender) {
+                 setLedEffect(LED_EFFECT_ENCODER_RAINBOW);
+                 return false;
+             }                                                                    },
+#endif
 #endif
             {"Config - Speed",
              setLedEffectSpeedConfig,                                     false,
@@ -510,7 +553,16 @@ void setLedEffectConfig() {
 
         addOptionToMainMenu();
 
-        int selectedOption = loopOptions(options, bruceConfig.ledEffect);
+        // Find the index of the currently selected effect in the options array
+        int currentIndex = 0;
+        for (int i = 0; i < options.size(); i++) {
+            if (options[i].selected) {
+                currentIndex = i;
+                break;
+            }
+        }
+
+        int selectedOption = loopOptions(options, currentIndex);
         if (selectedOption == -1 || selectedOption == options.size() - 1) {
             ledPreviewMode(false);
             ledSetup();
