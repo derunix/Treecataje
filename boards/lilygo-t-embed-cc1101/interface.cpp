@@ -8,6 +8,9 @@
 extern RotaryEncoder *encoder;
 IRAM_ATTR void checkPosition();
 
+// Forward declaration for input helper
+static void forceClearAllInputs();
+
 // Battery libs
 #if defined(T_EMBED_1101)
 // Power handler for battery detection
@@ -78,9 +81,10 @@ void _setup_gpio() {
     }
     if (bq.getDesignCap() != BATTERY_DESIGN_CAPACITY) { bq.setDesignCap(BATTERY_DESIGN_CAPACITY); }
     // Start with default IR, RF and RFID Configs, replace old
-    bruceConfig.rfModule = CC1101_SPI_MODULE;
-    bruceConfig.rfidModule = PN532_I2C_MODULE;
-    bruceConfig.irRx = 1;
+    // TODO: These fields were removed from BruceConfig - may need restoration if needed
+    // bruceConfig.rfModule = CC1101_SPI_MODULE;
+    // bruceConfig.rfidModule = PN532_I2C_MODULE;
+    // bruceConfig.irRx = 1;
 #else
     pinMode(BAT_PIN, INPUT); // Battery value
     Wire.begin(GROVE_SDA, GROVE_SCL);
@@ -312,7 +316,8 @@ void powerDownNFC() {
 }
 
 void powerDownCC1101() {
-    if (!initRfModule("rx", bruceConfig.rfFreq)) { Serial.println("Can't init CC1101"); }
+    // Use default frequency 433.92 MHz if rfFreq field not available
+    if (!initRfModule("rx", 433.92)) { Serial.println("Can't init CC1101"); }
 
     ELECHOUSE_cc1101.goSleep();
 }

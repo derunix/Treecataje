@@ -4,7 +4,15 @@
       "Bash(pio run:*)",
       "Bash(where:*)",
       "Bash(/c/Users/derun/.platformio/packages/toolchain-xtensa-esp32s3/bin/xtensa-esp32s3-elf-g++.exe:*)",
-      "Bash(git add:*)"
+      "Bash(git add:*)",
+      "Bash(for dir in lib/*/)",
+      "Bash(do if [ ! -f \"$dir/library.json\" ])",
+      "Bash([ ! -f \"$dir/library.properties\" ])",
+      "Bash([ ! -f \"$dir/module.json\" ])",
+      "Bash([ -d \"$dir\" ])",
+      "Bash(then echo \"Empty: $dir\")",
+      "Bash(fi)",
+      "Bash(done)"
     ]
   }
 }
