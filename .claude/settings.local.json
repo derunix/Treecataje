@@ -14,7 +14,8 @@
       "Bash(fi)",
       "Bash(done)",
       "Bash(Select-Object -Last 100)",
-      "Bash(python -m platformio run:*)"
+      "Bash(python -m platformio run:*)",
+      "Bash(find:*)"
     ]
   }
 }

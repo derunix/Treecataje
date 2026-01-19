@@ -10,7 +10,8 @@
 #include <ESP8266WiFi.h>
 #else
 #include <WiFi.h>
-#include <driver/i2s.h>
+// Note: I2S driver is now handled by ESP8266Audio library (uses new driver API)
+// Removed: #include <driver/i2s.h>  // Legacy driver conflicts with new driver
 #endif
 
 namespace {
@@ -434,10 +435,11 @@ void RadioPlayer::resetAudioChain() {
     }
     if (_output) { _output->stop(); }
 #if !defined(ESP8266)
-    if (_i2sDriverReady) {
-        esp_err_t err = i2s_driver_uninstall((i2s_port_t)0);
-        if (err != ESP_OK) { RADIO_LOGW("i2s_driver_uninstall failed: %d", err); }
-    }
+    // Note: ESP8266Audio 2.4.1+ manages I2S driver internally, manual uninstall not needed
+    // if (_i2sDriverReady) {
+    //     esp_err_t err = i2s_driver_uninstall((i2s_port_t)0);
+    //     if (err != ESP_OK) { RADIO_LOGW("i2s_driver_uninstall failed: %d", err); }
+    // }
 #endif
     if (_output) {
         delete _output;
