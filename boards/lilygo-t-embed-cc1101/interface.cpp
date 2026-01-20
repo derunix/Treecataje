@@ -80,11 +80,12 @@ void _setup_gpio() {
         PPM.enableCharge();
     }
     if (bq.getDesignCap() != BATTERY_DESIGN_CAPACITY) { bq.setDesignCap(BATTERY_DESIGN_CAPACITY); }
-    // Start with default IR, RF and RFID Configs, replace old
-    // TODO: These fields were removed from BruceConfig - may need restoration if needed
-    // bruceConfig.rfModule = CC1101_SPI_MODULE;
-    // bruceConfig.rfidModule = PN532_I2C_MODULE;
-    // bruceConfig.irRx = 1;
+    // T-Embed CC1101 version - set RF module type
+    bruceConfigPins.rfModule = CC1101_SPI_MODULE;
+    bruceConfigPins.rfidModule = PN532_I2C_MODULE;
+    Serial.println("T-Embed CC1101 initialized");
+    Serial.printf("CC1101 pins: CS=%d, GDO0=%d, SCK=%d, MISO=%d, MOSI=%d\n",
+                  CC1101_SS_PIN, CC1101_GDO0_PIN, SPI_SCK_PIN, SPI_MISO_PIN, SPI_MOSI_PIN);
 #else
     pinMode(BAT_PIN, INPUT); // Battery value
     Wire.begin(GROVE_SDA, GROVE_SCL);

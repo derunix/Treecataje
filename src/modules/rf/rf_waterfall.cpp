@@ -207,7 +207,29 @@ void rf_waterfall_run() {
         if (current_line >= screen_height) current_line = display_top;
     }
 
-    returnToMenu = true;
+    // Save captured data to CSV if significant activity detected
+    if (max_rssi > -70) {
+        FS *fs = nullptr;
+        if (setupSdCard()) {
+            fs = &SD;
+            if (!SD.exists("/BruceRF")) SD.mkdir("/BruceRF");
+        } else {
+            fs = &LittleFS;
+            if (!LittleFS.exists("/BruceRF")) LittleFS.mkdir("/BruceRF");
+        }
+        if (fs) {
+            char filename[64];
+            snprintf(filename, sizeof(filename), "/BruceRF/waterfall_%lu.csv", millis());
+            File f = fs->open(filename, FILE_WRITE);
+            if (f) {
+                f.printf("peak_freq_mhz,peak_rssi_dbm,start_freq,end_freq\n");
+                f.printf("%.3f,%d,%.3f,%.3f\n", max_freq, max_rssi, f_start, f_end);
+                f.close();
+                Serial.printf("[Waterfall] Saved to %s\n", filename);
+            }
+        }
+    }
+
     deinitRfModule();
     delay(10);
 }

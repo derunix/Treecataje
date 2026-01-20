@@ -23,7 +23,8 @@
       "Bash(C:Usersderun.platformiopenvScriptsplatformio.exe run -e lilygo-t-embed-cc1101)",
       "Bash(powershell.exe -Command:*)",
       "Bash(python -m platformio pkg install:*)",
-      "Bash(cmd.exe /c \"python -m platformio run -e lilygo-t-embed-cc1101 -d C:\\\\Users\\\\derun\\\\bruce\\\\Bruce\")"
+      "Bash(cmd.exe /c \"python -m platformio run -e lilygo-t-embed-cc1101 -d C:\\\\Users\\\\derun\\\\bruce\\\\Bruce\")",
+      "Bash(C:/Users/derun/.platformio/penv/Scripts/pio.exe run -e lilygo-t-embed-cc1101 -d \"c:/Users/derun/bruce/Bruce\")"
     ]
   }
 }

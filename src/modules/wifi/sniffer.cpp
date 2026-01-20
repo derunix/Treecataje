@@ -211,8 +211,79 @@ bool isItEAPOL(const wifi_promiscuous_pkt_t *packet) {
 
 HandshakeTracker hsTracker;
 
-bool handshakeUsable(const HandshakeTracker &hs) { // EAPOL Messages needed: 1+2 or 3+4
-    return (hs.msg1 && hs.msg2) || (hs.msg3 && hs.msg4);
+bool handshakeUsable(const HandshakeTracker &hs) { // EAPOL Messages needed: 1+2 or 3+4 or PMKID
+    return (hs.msg1 && hs.msg2) || (hs.msg3 && hs.msg4) || hs.pmkid;
+}
+
+// Extract PMKID from EAPOL Message 1 (if present in RSN PMKID list)
+// Returns true if PMKID found and copied to pmkidOut (must be 16 bytes)
+bool extractPmkid(const wifi_promiscuous_pkt_t *pkt, uint8_t *pmkidOut) {
+    if (!pkt || !pmkidOut) return false;
+
+    const uint8_t *payload = pkt->payload;
+    int len = pkt->rx_ctrl.sig_len;
+
+    // QoS frames add 2 bytes to MAC header
+    int qosOffset = ((payload[0] & 0x0F) == 0x08) ? 2 : 0;
+
+    // EAPOL frame structure:
+    // MAC header (24 + qosOffset) + LLC/SNAP (8) + EAPOL header (4) = start of EAPOL-Key
+    int eapolKeyOffset = 24 + qosOffset + 8 + 4;
+
+    if (len < eapolKeyOffset + 99) return false; // Minimum size for EAPOL-Key with PMKID
+
+    // Check EAPOL type (should be 0x03 for EAPOL-Key)
+    if (payload[24 + qosOffset + 8 + 1] != 0x03) return false;
+
+    // Key Descriptor Type at eapolKeyOffset (0x02 = RSN, 0xFE = WPA)
+    uint8_t keyDescType = payload[eapolKeyOffset];
+    if (keyDescType != 0x02) return false; // Only RSN supports PMKID
+
+    // Key Information at eapolKeyOffset + 1 (2 bytes)
+    uint16_t keyInfo = (payload[eapolKeyOffset + 1] << 8) | payload[eapolKeyOffset + 2];
+
+    // Check if this is Message 1 (ACK set, MIC not set)
+    bool ack = keyInfo & (1 << 7);
+    bool mic = keyInfo & (1 << 8);
+    if (!ack || mic) return false; // Not Message 1
+
+    // Key Data Length at eapolKeyOffset + 93 (2 bytes, big-endian)
+    int keyDataLenOffset = eapolKeyOffset + 93;
+    if (len < keyDataLenOffset + 2) return false;
+
+    uint16_t keyDataLen = (payload[keyDataLenOffset] << 8) | payload[keyDataLenOffset + 1];
+    int keyDataOffset = keyDataLenOffset + 2;
+
+    if (keyDataLen == 0 || len < keyDataOffset + keyDataLen) return false;
+
+    // Parse Key Data for RSN PMKID (tag 0xDD with OUI 00-0F-AC and type 4)
+    // Or look for PMKID List in RSN IE format
+    int pos = keyDataOffset;
+    int endPos = keyDataOffset + keyDataLen;
+
+    while (pos + 2 <= endPos) {
+        uint8_t tag = payload[pos];
+        uint8_t tagLen = payload[pos + 1];
+
+        if (pos + 2 + tagLen > endPos) break;
+
+        // Vendor-specific IE (0xDD) with OUI 00-0F-AC (IEEE 802.11i/RSN)
+        if (tag == 0xDD && tagLen >= 20) {
+            // Check OUI: 00-0F-AC and type 04 (PMKID)
+            if (payload[pos + 2] == 0x00 && payload[pos + 3] == 0x0F &&
+                payload[pos + 4] == 0xAC && payload[pos + 5] == 0x04) {
+                // PMKID starts at pos + 6, length 16
+                if (tagLen >= 20) {
+                    memcpy(pmkidOut, &payload[pos + 6], 16);
+                    return true;
+                }
+            }
+        }
+
+        pos += 2 + tagLen;
+    }
+
+    return false;
 }
 
 // Analyze the EAPOL Message Number
@@ -483,7 +554,27 @@ static FrameInfo analyzeFrame(wifi_promiscuous_pkt_t *pkt) {
         info.eapolMsgNum = msg;
         // Update handshake tracker
         switch (msg) {
-            case 1: hsTracker.msg1 = true; break;
+            case 1:
+                hsTracker.msg1 = true;
+                // Try to extract PMKID from Message 1
+                if (!hsTracker.pmkid) {
+                    if (extractPmkid(pkt, hsTracker.pmkidData)) {
+                        hsTracker.pmkid = true;
+                        // Store AP and STA MAC addresses for hashcat export
+                        memcpy(hsTracker.apMac, apAddr, 6);
+                        // STA is the other address (addr1 if AP is addr2, or addr2 if AP is addr1)
+                        const uint8_t *staAddr = (memcmp(addr1, bssid, 6) == 0) ? addr2 : addr1;
+                        memcpy(hsTracker.staMac, staAddr, 6);
+                        // Get SSID from cache
+                        auto ssidIt = beaconSsidCache.find(info.apKey);
+                        if (ssidIt != beaconSsidCache.end()) {
+                            strncpy(hsTracker.ssid, ssidIt->second.c_str(), 32);
+                            hsTracker.ssid[32] = '\0';
+                        }
+                        Serial.println("[PMKID] Captured PMKID from Message 1!");
+                    }
+                }
+                break;
             case 2: hsTracker.msg2 = true; break;
             case 3: hsTracker.msg3 = true; break;
             case 4: hsTracker.msg4 = true; break;
@@ -1305,4 +1396,62 @@ Exit:
 void setHandshakeSniffer() {
     esp_wifi_set_promiscuous_rx_cb(NULL);
     esp_wifi_set_promiscuous_rx_cb(sniffer);
+}
+
+// Export PMKID to hashcat 22000 format
+// Format: WPA*01*PMKID*MAC_AP*MAC_STA*ESSID_HEX***
+// Returns true if export successful
+bool exportToHashcat22000(FS *fs, const char *pcapPath, const char *outputPath) {
+    if (!fs || !hsTracker.pmkid) {
+        Serial.println("[Hashcat Export] No PMKID available");
+        return false;
+    }
+
+    File outFile = fs->open(outputPath, FILE_WRITE);
+    if (!outFile) {
+        Serial.println("[Hashcat Export] Failed to create output file");
+        return false;
+    }
+
+    // Build the hashcat 22000 line for PMKID (type 01)
+    // Format: WPA*01*PMKID*MAC_AP*MAC_STA*ESSID_HEX***
+    String line = "WPA*01*";
+
+    // PMKID (16 bytes as hex)
+    for (int i = 0; i < 16; i++) {
+        char hex[3];
+        sprintf(hex, "%02x", hsTracker.pmkidData[i]);
+        line += hex;
+    }
+    line += "*";
+
+    // AP MAC
+    for (int i = 0; i < 6; i++) {
+        char hex[3];
+        sprintf(hex, "%02x", hsTracker.apMac[i]);
+        line += hex;
+    }
+    line += "*";
+
+    // STA MAC
+    for (int i = 0; i < 6; i++) {
+        char hex[3];
+        sprintf(hex, "%02x", hsTracker.staMac[i]);
+        line += hex;
+    }
+    line += "*";
+
+    // ESSID as hex
+    for (size_t i = 0; i < strlen(hsTracker.ssid); i++) {
+        char hex[3];
+        sprintf(hex, "%02x", (uint8_t)hsTracker.ssid[i]);
+        line += hex;
+    }
+    line += "***";
+
+    outFile.println(line);
+    outFile.close();
+
+    Serial.println("[Hashcat Export] PMKID exported to: " + String(outputPath));
+    return true;
 }

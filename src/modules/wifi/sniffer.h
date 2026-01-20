@@ -10,7 +10,18 @@ struct HandshakeTracker {
     bool msg2 = false;
     bool msg3 = false;
     bool msg4 = false;
+    bool pmkid = false;           // PMKID found in Message 1
+    uint8_t pmkidData[16] = {0};  // 16-byte PMKID value
+    uint8_t apMac[6] = {0};       // AP MAC for hashcat export
+    uint8_t staMac[6] = {0};      // Station MAC for hashcat export
+    char ssid[33] = {0};          // SSID for hashcat export
 };
+
+// PMKID extraction from EAPOL Message 1
+bool extractPmkid(const wifi_promiscuous_pkt_t *pkt, uint8_t *pmkidOut);
+
+// Export handshake to hashcat 22000 format
+bool exportToHashcat22000(FS *fs, const char *pcapPath, const char *outputPath);
 
 extern HandshakeTracker hsTracker;
 

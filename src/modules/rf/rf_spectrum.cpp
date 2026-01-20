@@ -2,6 +2,9 @@
 #include "rf_utils.h"
 #include "structs.h"
 #include <RCSwitch.h>
+#include <algorithm>
+#include <vector>
+#include <utility>
 
 static bool spectrum_rmt_rx_done_callback(
     rmt_channel_t *channel, const rmt_rx_done_event_data_t *edata, void *user_data
@@ -249,12 +252,31 @@ void rf_CC1101_rssi() {
                 tft.fillRect(i * space, 20, space, max_bar_size - bar_size[i], bruceConfig.bgColor);
                 if (bar_size[i] > bar_size[max_idx] && bar_size[i] > min_value) max_idx = i;
             }
-            if (bar_size[max_idx] > min_value) {
-                char buf[7];
-                float var = subghz_frequency_list[range_limits[bruceConfigPins.rfScanRange][0] + max_idx];
-                snprintf(buf, sizeof(buf), "%.2f", var);
-                tft.drawCentreString("Max=      ", tftWidth / 2, tftHeight - 10);
-                tft.drawCentreString("Max=" + String(buf), tftWidth / 2, tftHeight - 10);
+            // Find and display multiple peaks (top 3)
+            std::vector<std::pair<int, int>> peaks; // (index, size)
+            for (size_t i = 0; i < bar_size.size(); i++) {
+                if (bar_size[i] > min_value) {
+                    peaks.push_back({i, bar_size[i]});
+                }
+            }
+            // Sort by signal strength descending
+            std::sort(peaks.begin(), peaks.end(), [](const auto &a, const auto &b) {
+                return a.second > b.second;
+            });
+
+            if (!peaks.empty()) {
+                char buf[32];
+                float var = subghz_frequency_list[range_limits[bruceConfigPins.rfScanRange][0] + peaks[0].first];
+                snprintf(buf, sizeof(buf), "Peak: %.3f MHz", var);
+                tft.fillRect(0, tftHeight - 18, tftWidth, 18, bruceConfig.bgColor);
+                tft.drawCentreString(buf, tftWidth / 2, tftHeight - 10);
+
+                // Mark peak positions with small triangles
+                for (size_t p = 0; p < std::min(peaks.size(), (size_t)3); p++) {
+                    int px = peaks[p].first * space + space/2;
+                    uint16_t color = (p == 0) ? TFT_RED : (p == 1) ? TFT_YELLOW : TFT_GREEN;
+                    tft.fillTriangle(px-3, 18, px+3, 18, px, 12, color);
+                }
             }
         }
         if (check(EscPress)) { break; }
@@ -262,6 +284,35 @@ void rf_CC1101_rssi() {
             deinitRfModule();
             rf_range_selection(bruceConfigPins.rfFreq);
             redraw = true;
+        }
+        // Export data with Next button
+        if (check(NextPress)) {
+            FS *fs = nullptr;
+            if (setupSdCard()) {
+                fs = &SD;
+                if (!SD.exists("/BruceRF")) SD.mkdir("/BruceRF");
+            } else {
+                fs = &LittleFS;
+                if (!LittleFS.exists("/BruceRF")) LittleFS.mkdir("/BruceRF");
+            }
+            if (fs) {
+                char filename[64];
+                snprintf(filename, sizeof(filename), "/BruceRF/spectrum_%lu.csv", millis());
+                File f = fs->open(filename, FILE_WRITE);
+                if (f) {
+                    f.println("freq_mhz,rssi_relative");
+                    int range = range_limits[bruceConfigPins.rfScanRange][1] -
+                                range_limits[bruceConfigPins.rfScanRange][0] + 1;
+                    for (int i = 0; i < range; i++) {
+                        float freq = subghz_frequency_list[range_limits[bruceConfigPins.rfScanRange][0] + i];
+                        f.printf("%.3f,%d\n", freq, bar_size[i]);
+                    }
+                    f.close();
+                    displaySuccess("Saved: " + String(filename));
+                    delay(1000);
+                    redraw = true;
+                }
+            }
         }
     }
     deinitRfModule();

