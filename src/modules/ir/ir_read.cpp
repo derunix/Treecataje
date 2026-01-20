@@ -113,7 +113,7 @@ void IrRead::setup() {
 void IrRead::loop() {
     while (1) {
         if (check(EscPress)) {
-            returnToMenu = true;
+            // returnToMenu removed - return to previous menu level
             button_pos = 0;
             quickloop = false;
 #ifdef USE_BOOST /// DISABLE 5V OUTPUT

@@ -74,7 +74,7 @@ void Wardriving::end() {
 
     gps_provider_end();
     restorePins();
-    returnToMenu = true;
+    // returnToMenu removed - function returns normally, allowing back navigation
     gpsConnected = false;
 }
 
@@ -219,7 +219,7 @@ void Wardriving::append_to_file(int network_amount) {
     FS *fs;
     if (!getFsStorage(fs)) {
         padprintln("Storage setup error");
-        returnToMenu = true;
+        // returnToMenu removed - function returns normally, allowing back navigation
         return;
     }
 
@@ -233,7 +233,7 @@ void Wardriving::append_to_file(int network_amount) {
 
     if (!file) {
         padprintln("Failed to open file for writing");
-        returnToMenu = true;
+        // returnToMenu removed - function returns normally, allowing back navigation
         return;
     }
 

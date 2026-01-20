@@ -339,11 +339,11 @@ void mainloop() {
         reciveMessage();
         if (breakloop) { break; }
 #ifdef HAS_3_BUTTONS
-        if (EscPress) {
+        if (check(EscPress)) {
             long _tmp = millis();
 
             LongPress = true;
-            while (EscPress) {
+            while (check(EscPress)) {
                 if (millis() - _tmp > 200) {
                     // start drawing arc after short delay; animate over 500ms
                     int sweep = 0;

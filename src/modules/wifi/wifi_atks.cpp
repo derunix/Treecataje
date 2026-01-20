@@ -168,12 +168,10 @@ void wifi_atk_info(String tssid, String mac, uint8_t channel) {
 
     while (1) {
         if (check(SelPress)) {
-            returnToMenu = false;
             return;
         }
         if (check(EscPress)) {
-            returnToMenu = true;
-            return;
+            return; // Go back one level
         }
         vTaskDelay(50 / portTICK_PERIOD_MS);
     }
@@ -345,9 +343,9 @@ ScanNets:
             for (int i = 0; i < 100; i++) {
                 send_raw_frame(deauth_frame, sizeof(deauth_frame_default));
                 count += 3;
-                if (EscPress) break;
+                if (check(EscPress)) break;
             }
-            if (EscPress) break;
+            if (check(EscPress)) break;
         }
         // Update counter every 2 seconds
         if (millis() - lastTime > 2000) {
@@ -366,7 +364,7 @@ ScanNets:
         if (check(EscPress)) break;
     }
     wifi_atk_unsetWifi();
-    returnToMenu = true;
+    // returnToMenu removed - function returns normally, allowing back navigation
 }
 
 /***************************************************************************************
@@ -631,7 +629,7 @@ void capture_handshake(String tssid, String mac, uint8_t channel) {
     esp_wifi_set_promiscuous(false);
     esp_wifi_set_promiscuous_rx_cb(NULL);
     wifi_atk_unsetWifi();
-    returnToMenu = true;
+    // returnToMenu removed - function returns normally, allowing back navigation
 }
 
 /***************************************************************************************
@@ -712,7 +710,7 @@ void target_atk(String tssid, String mac, uint8_t channel) {
         if (check(EscPress)) break;
     }
     wifi_atk_unsetWifi();
-    returnToMenu = true;
+    // returnToMenu removed - function returns normally, allowing back navigation
 }
 
 void generateRandomWiFiMac(uint8_t *mac) {
@@ -826,7 +824,7 @@ void beaconSpamList(const char list[]) {
 
         // move cursor past the SSID and newline
         i += j;
-        if (EscPress) break;
+        if (check(EscPress)) break;
     }
 }
 
@@ -859,7 +857,7 @@ void beaconSpamSingle(String baseSSID) {
             counter = 1;
             nextChannel(); // change channel after resetting the counter
         }
-        if (EscPress) break; // exit condition preserved
+        if (check(EscPress)) break; // exit condition preserved
     }
 }
 

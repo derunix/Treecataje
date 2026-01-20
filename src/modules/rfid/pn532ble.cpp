@@ -45,8 +45,7 @@ bool Pn532ble::connect() {
 void Pn532ble::loop() {
     while (1) {
         if (check(EscPress)) {
-            returnToMenu = true;
-            break;
+            break; // Return to previous menu level
         }
 
         if (check(SelPress)) { selectMode(); }

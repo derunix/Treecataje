@@ -1,0 +1,117 @@
+Processing lilygo-t-embed-cc1101 (board: lilygo-t-embed-cc1101; platform: https://github.com/pioarduino/platform-espressif32/releases/download/55.03.34/platform-espressif32.zip; framework: arduino)
+--------------------------------------------------------------------------------
+Library Manager: Installing h2zero/NimBLE-Arduino
+Library Manager: Installing h2zero/NimBLE-Arduino
+Library Manager: Installing h2zero/NimBLE-Arduino
+Library Manager: Installing whywilson/ESP-PN532-UART
+Verbose mode can be enabled via `-v, --verbose` option
+[GZIP & EMBED INTO HEADER] - Nothing to process.
+CONFIGURATION: https://docs.platformio.org/page/boards/espressif32/lilygo-t-embed-cc1101.html
+PLATFORM: Espressif 32 (55.3.34) > LilyGo T-Embed-PN532 (16M Flash 8M QSPI PSRAM)
+HARDWARE: ESP32S3 240MHz, 320KB RAM, 16MB Flash
+DEBUG: Current (esp-builtin) On-board (esp-builtin) External (cmsis-dap, esp-bridge, esp-prog, iot-bus-jtag, jlink, minimodule, olimex-arm-usb-ocd, olimex-arm-usb-ocd-h, olimex-arm-usb-tiny-h, olimex-jtag-tiny, tumpa)
+PACKAGES: 
+ - contrib-piohome @ 3.4.4 
+ - framework-arduinoespressif32 @ 3.3.4 
+ - framework-arduinoespressif32-libs @ 5.5.0+sha.8410210c9a 
+ - tool-esp-rom-elfs @ 2024.10.11 
+ - tool-esptoolpy @ 5.1.0 
+ - tool-mklittlefs @ 3.2.0 
+ - toolchain-xtensa-esp-elf @ 14.2.0+20250730
+*** Applied include path shortening for 330 framework paths ***
+*** Path length reduced from 39029 to ~13712 characters ***
+*** Estimated savings: 24750 characters ***
+LDF: Library Dependency Finder -> https://bit.ly/configure-pio-ldf
+LDF Modes: Finder ~ chain, Compatibility ~ soft
+Found 89 compatible libraries
+Scanning dependencies...
+Dependency Graph
+|-- WireGuard-ESP32 @ 0.1.5+sha.4e22d2e
+|-- IRremoteESP8266 @ 2.8.6+sha.22cd38c
+|-- Time @ 1.6.1
+|-- LibSSH-ESP32 @ 5.7.0
+|-- Adafruit BusIO @ 1.17.2-bruce.1+sha.27230c1
+|-- Adafruit PN532 @ 1.3.3-bruce.1+sha.e91d695
+|-- BER-TLV @ 0.0.0+20260119191706.sha.bd61b70
+|-- RFID_MFRC522v2 @ 2.0.6+sha.a6977df
+|-- ESP Chameleon Ultra @ 0.0.2+sha.f66f354
+|-- ESP Amiibolink @ 0.0.2+sha.fc26412
+|-- SimpleCLI @ 1.1.4+sha.b23d377
+|-- ESP PN32BLE @ 0.0.2+sha.542f121
+|-- ESP PN532 UART @ 0.0.2+sha.06d2716
+|-- ESP PN532Killer @ 0.0.7+sha.71bf110
+|-- NTPClient @ 3.2.1
+|-- Timezone @ 1.2.6
+|-- ESP32Time @ 2.0.6
+|-- FFat @ 3.3.4
+|-- ArduinoJson @ 7.4.2
+|-- rc-switch @ 2.6.4+sha.6515251
+|-- ESP8266Audio @ 2.4.1
+|-- ESP8266SAM @ 1.1.0
+|-- TinyGPSPlus @ 1.1.0
+|-- FFT @ 0.0.1
+|-- NimBLE-Arduino @ 2.3.7
+|-- RF24 @ 1.4.11
+|-- Adafruit Si4713 Library @ 1.2.3
+|-- JPEGDecoder @ 2.0.0
+|-- SmartRC-CC1101-Driver-Lib @ 2.5.7+sha.7bba521
+|-- ducktape @ 0.0.0+20251130170803
+|-- OneWire @ 2.3.8+sha.b6dbb86
+|-- ESP32-PSRamFS @ 1.0.6+sha.5ace2e6
+|-- AnimatedGIF @ 2.2.0
+|-- PNGdec @ 1.1.6
+|-- ESPAsyncWebServer @ 3.9.4
+|-- FastLED @ 3.10.3
+|-- RadioLib @ 7.5.0
+|-- XPowersLib @ 0.2.7
+|-- RotaryEncoder @ 1.5.3
+|-- utility
+|-- Wire @ 3.3.4
+|-- WiFi @ 3.3.4
+|-- BruceHAL @ 7.3.1
+|-- HTTPClient @ 3.3.4
+|-- Ethernet @ 3.3.4
+|-- Networking @ 3.3.4
+|-- SPI @ 3.3.4
+|-- AsyncTCP @ 3.4.10
+|-- FS @ 3.3.4
+|-- LittleFS @ 3.3.4
+|-- Bad_Usb_Lib
+|-- TFT_eSPI QRcode @ 1.0.0
+|-- DNSServer @ 3.3.4
+|-- WebServer @ 3.3.4
+|-- RTC
+|-- ESPmDNS @ 3.3.4
+|-- PN532_SRIX
+|-- NetworkClientSecure @ 3.3.4
+|-- SPIFFS @ 3.3.4
+|-- TFT_eSPI @ 2.5.43
+Building in release mode
+Compiling .pio\build\lilygo-t-embed-cc1101\src\core\menu_items\NRF24.cpp.o
+Compiling .pio\build\lilygo-t-embed-cc1101\src\core\serial_commands\nrf_commands.cpp.o
+Compiling .pio\build\lilygo-t-embed-cc1101\src\modules\NRF24\nrf_hijack.cpp.o
+Compiling .pio\build\lilygo-t-embed-cc1101\src\modules\NRF24\nrf_sniffer.cpp.o
+src/modules/NRF24/nrf_sniffer.cpp: In function 'void nrf_sniffer_interactive()':
+src/modules/NRF24/nrf_sniffer.cpp:621:47: error: 'KEY_1' was not declared in this scope
+  621 |         if (check(NextPress) || checkKeyPress(KEY_1)) {
+      |                                               ^~~~~
+src/modules/NRF24/nrf_sniffer.cpp:621:33: error: 'checkKeyPress' was not declared in this scope; did you mean '_getKeyPress'?
+  621 |         if (check(NextPress) || checkKeyPress(KEY_1)) {
+      |                                 ^~~~~~~~~~~~~
+      |                                 _getKeyPress
+src/modules/NRF24/nrf_sniffer.cpp:625:54: error: 'KEY_2' was not declared in this scope
+  625 |         } else if (check(PrevPress) || checkKeyPress(KEY_2)) {
+      |                                                      ^~~~~
+src/modules/NRF24/nrf_sniffer.cpp:629:34: error: 'KEY_3' was not declared in this scope
+  629 |         } else if (checkKeyPress(KEY_3)) {
+      |                                  ^~~~~
+src/modules/NRF24/nrf_sniffer.cpp:633:34: error: 'KEY_4' was not declared in this scope
+  633 |         } else if (checkKeyPress(KEY_4)) {
+      |                                  ^~~~~
+*** [.pio\build\lilygo-t-embed-cc1101\src\modules\NRF24\nrf_sniffer.cpp.o] Error 1
+========================= [FAILED] Took 69.60 seconds =========================
+
+Environment            Status    Duration
+---------------------  --------  ------------
+lilygo-t-embed-cc1101  FAILED    00:01:09.602
+==================== 1 failed, 0 succeeded in 00:01:09.602 ====================

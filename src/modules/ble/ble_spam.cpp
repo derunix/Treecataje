@@ -711,8 +711,7 @@ void aj_adv(int ble_choice) { // customSet defaults to false
         }
 
         if (check(EscPress)) {
-            returnToMenu = true;
-            break;
+            break; // Return to previous menu, not main menu
         }
     }
 

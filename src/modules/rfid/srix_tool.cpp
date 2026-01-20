@@ -89,8 +89,7 @@ void SRIXTool::setup() {
 void SRIXTool::loop() {
     while (1) {
         if (check(EscPress)) {
-            returnToMenu = true;
-            break;
+            break; // Return to previous menu level
         }
 
         if (check(SelPress)) { select_state(); }

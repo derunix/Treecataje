@@ -16,7 +16,14 @@
       "Bash(Select-Object -Last 100)",
       "Bash(python -m platformio run:*)",
       "Bash(find:*)",
-      "Bash(platformio run:*)"
+      "Bash(platformio run:*)",
+      "Bash(~/.platformio/penv/Scripts/platformio run -e lilygo-t-embed-cc1101)",
+      "Bash(~/.platformio/penv/Scripts/platformio.exe run:*)",
+      "Bash(tee:*)",
+      "Bash(C:Usersderun.platformiopenvScriptsplatformio.exe run -e lilygo-t-embed-cc1101)",
+      "Bash(powershell.exe -Command:*)",
+      "Bash(python -m platformio pkg install:*)",
+      "Bash(cmd.exe /c \"python -m platformio run -e lilygo-t-embed-cc1101 -d C:\\\\Users\\\\derun\\\\bruce\\\\Bruce\")"
     ]
   }
 }

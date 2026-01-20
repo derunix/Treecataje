@@ -169,7 +169,7 @@ void rf_waterfall_run() {
                     case 1: f_end -= step; break;
                     case 2: return;
                 }
-                if (EscPress) EscPress = false; // Reset for StickCs
+                // Button cleanup handled by check() function
                 delay(100);
             }
         }

@@ -42,8 +42,7 @@ void RFJammer::run_full_jammer() {
     while (sendRF) {
         if (check(EscPress) || (millis() - tmr0 > 20000)) {
             sendRF = false;
-            returnToMenu = true;
-            break;
+            break; // Exit loop, return to previous menu
         }
     }
     digitalWrite(nTransmitterPin, LOW); // Turn off Jammer
@@ -58,8 +57,7 @@ void RFJammer::run_itmt_jammer() {
                 // Moved Escape check into this loop to check every cycle
                 if (check(EscPress) || (millis() - tmr0) > 20000) {
                     sendRF = false;
-                    returnToMenu = true;
-                    break;
+                    break; // Exit loop, return to previous menu
                 }
                 digitalWrite(nTransmitterPin, HIGH); // Ativa o pino
                 // keeps the pin active for a while and increase increase

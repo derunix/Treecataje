@@ -1,0 +1,90 @@
+Processing lilygo-t-embed-cc1101 (board: lilygo-t-embed-cc1101; platform: https://github.com/pioarduino/platform-espressif32/releases/download/55.03.34/platform-espressif32.zip; framework: arduino)
+--------------------------------------------------------------------------------
+Tool Manager: Installing https://github.com/espressif/arduino-esp32/releases/download/3.3.4/esp32-3.3.4.tar.xz
+Unpacking 0% 10% 20% 30% 40% 50% 60% 70% 80% 90% 100%
+[WinError 32] Процесс не может получить доступ к файлу, так как этот файл занят другим процессом: 'c:\\Users\\derun\\bruce\\Bruce\\.pio\\cache\\tmp\\pkg-installing-tmtlsss0\\esp32-3.3.4\\variants\\elecrow_crowpanel_7\\pins_arduino.h' 
+Please manually remove the file `c:\Users\derun\bruce\Bruce\.pio\cache\tmp\pkg-installing-tmtlsss0\esp32-3.3.4\variants\elecrow_crowpanel_7\pins_arduino.h`
+[WinError 32] Процесс не может получить доступ к файлу, так как этот файл занят другим процессом: 'c:\\Users\\derun\\bruce\\Bruce\\.pio\\cache\\tmp\\pkg-installing-tmtlsss0\\esp32-3.3.4\\variants\\uPesy_esp32c3_basic\\pins_arduino.h' 
+Please manually remove the file `c:\Users\derun\bruce\Bruce\.pio\cache\tmp\pkg-installing-tmtlsss0\esp32-3.3.4\variants\uPesy_esp32c3_basic\pins_arduino.h`
+[WinError 145] Папка не пуста: 'c:\\Users\\derun\\bruce\\Bruce\\.pio\\cache\\tmp\\pkg-installing-tmtlsss0\\esp32-3.3.4\\variants\\elecrow_crowpanel_7' 
+Please manually remove the file `c:\Users\derun\bruce\Bruce\.pio\cache\tmp\pkg-installing-tmtlsss0\esp32-3.3.4\variants\elecrow_crowpanel_7`
+[WinError 145] Папка не пуста: 'c:\\Users\\derun\\bruce\\Bruce\\.pio\\cache\\tmp\\pkg-installing-tmtlsss0\\esp32-3.3.4\\variants\\uPesy_esp32c3_basic' 
+Please manually remove the file `c:\Users\derun\bruce\Bruce\.pio\cache\tmp\pkg-installing-tmtlsss0\esp32-3.3.4\variants\uPesy_esp32c3_basic`
+[WinError 145] Папка не пуста: 'c:\\Users\\derun\\bruce\\Bruce\\.pio\\cache\\tmp\\pkg-installing-tmtlsss0\\esp32-3.3.4\\variants' 
+Please manually remove the file `c:\Users\derun\bruce\Bruce\.pio\cache\tmp\pkg-installing-tmtlsss0\esp32-3.3.4\variants`
+[WinError 145] Папка не пуста: 'c:\\Users\\derun\\bruce\\Bruce\\.pio\\cache\\tmp\\pkg-installing-tmtlsss0\\esp32-3.3.4' 
+Please manually remove the file `c:\Users\derun\bruce\Bruce\.pio\cache\tmp\pkg-installing-tmtlsss0\esp32-3.3.4`
+[WinError 145] Папка не пуста: 'c:\\Users\\derun\\bruce\\Bruce\\.pio\\cache\\tmp\\pkg-installing-tmtlsss0' 
+Please manually remove the file `c:\Users\derun\bruce\Bruce\.pio\cache\tmp\pkg-installing-tmtlsss0`
+Tool Manager: framework-arduinoespressif32@3.3.4 has been installed!
+Tool Manager: Installing https://github.com/bmorcelli/esp32-arduino-lib-builder/releases/download/idf-release_v5.5/bruce_esp32-arduino-libs-20251205-131242.zip
+Unpacking 0% 10% 20% 30% 40% 50% 60% 70% 80% 90% 100%
+[WinError 32] Процесс не может получить доступ к файлу, так как этот файл занят другим процессом: 'c:\\Users\\derun\\bruce\\Bruce\\.pio\\cache\\tmp\\pkg-installing-dec793u7\\esp32p4_es\\include\\esp_driver_ana_cmpr\\include\\driver\\ana_cmpr_types.h' 
+Please manually remove the file `c:\Users\derun\bruce\Bruce\.pio\cache\tmp\pkg-installing-dec793u7\esp32p4_es\include\esp_driver_ana_cmpr\include\driver\ana_cmpr_types.h`
+[WinError 145] Папка не пуста: 'c:\\Users\\derun\\bruce\\Bruce\\.pio\\cache\\tmp\\pkg-installing-dec793u7\\esp32p4_es\\include\\esp_driver_ana_cmpr\\include\\driver' 
+Please manually remove the file `c:\Users\derun\bruce\Bruce\.pio\cache\tmp\pkg-installing-dec793u7\esp32p4_es\include\esp_driver_ana_cmpr\include\driver`
+[WinError 145] Папка не пуста: 'c:\\Users\\derun\\bruce\\Bruce\\.pio\\cache\\tmp\\pkg-installing-dec793u7\\esp32p4_es\\include\\esp_driver_ana_cmpr\\include' 
+Please manually remove the file `c:\Users\derun\bruce\Bruce\.pio\cache\tmp\pkg-installing-dec793u7\esp32p4_es\include\esp_driver_ana_cmpr\include`
+[WinError 32] Процесс не может получить доступ к файлу, так как этот файл занят другим процессом: 'c:\\Users\\derun\\bruce\\Bruce\\.pio\\cache\\tmp\\pkg-installing-dec793u7\\esp32p4_es\\include\\esp_driver_i2s\\include\\driver\\i2s_common.h' 
+Please manually remove the file `c:\Users\derun\bruce\Bruce\.pio\cache\tmp\pkg-installing-dec793u7\esp32p4_es\include\esp_driver_i2s\include\driver\i2s_common.h`
+[WinError 145] Папка не пуста: 'c:\\Users\\derun\\bruce\\Bruce\\.pio\\cache\\tmp\\pkg-installing-dec793u7\\esp32p4_es\\include\\esp_driver_i2s\\include\\driver' 
+Please manually remove the file `c:\Users\derun\bruce\Bruce\.pio\cache\tmp\pkg-installing-dec793u7\esp32p4_es\include\esp_driver_i2s\include\driver`
+[WinError 145] Папка не пуста: 'c:\\Users\\derun\\bruce\\Bruce\\.pio\\cache\\tmp\\pkg-installing-dec793u7\\esp32p4_es\\include\\esp_driver_i2s\\include' 
+Please manually remove the file `c:\Users\derun\bruce\Bruce\.pio\cache\tmp\pkg-installing-dec793u7\esp32p4_es\include\esp_driver_i2s\include`
+[WinError 32] Процесс не может получить доступ к файлу, так как этот файл занят другим процессом: 'c:\\Users\\derun\\bruce\\Bruce\\.pio\\cache\\tmp\\pkg-installing-dec793u7\\esp32p4_es\\include\\esp_rom\\esp32p4\\include\\esp32p4\\rom\\aes.h' 
+Please manually remove the file `c:\Users\derun\bruce\Bruce\.pio\cache\tmp\pkg-installing-dec793u7\esp32p4_es\include\esp_rom\esp32p4\include\esp32p4\rom\aes.h`
+[WinError 145] Папка не пуста: 'c:\\Users\\derun\\bruce\\Bruce\\.pio\\cache\\tmp\\pkg-installing-dec793u7\\esp32p4_es\\include\\esp_rom\\esp32p4\\include\\esp32p4\\rom' 
+Please manually remove the file `c:\Users\derun\bruce\Bruce\.pio\cache\tmp\pkg-installing-dec793u7\esp32p4_es\include\esp_rom\esp32p4\include\esp32p4\rom`
+[WinError 145] Папка не пуста: 'c:\\Users\\derun\\bruce\\Bruce\\.pio\\cache\\tmp\\pkg-installing-dec793u7\\esp32p4_es\\include\\esp_rom\\esp32p4\\include\\esp32p4' 
+Please manually remove the file `c:\Users\derun\bruce\Bruce\.pio\cache\tmp\pkg-installing-dec793u7\esp32p4_es\include\esp_rom\esp32p4\include\esp32p4`
+[WinError 145] Папка не пуста: 'c:\\Users\\derun\\bruce\\Bruce\\.pio\\cache\\tmp\\pkg-installing-dec793u7\\esp32p4_es\\include\\esp_rom\\esp32p4\\include' 
+Please manually remove the file `c:\Users\derun\bruce\Bruce\.pio\cache\tmp\pkg-installing-dec793u7\esp32p4_es\include\esp_rom\esp32p4\include`
+[WinError 145] Папка не пуста: 'c:\\Users\\derun\\bruce\\Bruce\\.pio\\cache\\tmp\\pkg-installing-dec793u7\\esp32p4_es\\include\\esp_rom\\esp32p4' 
+Please manually remove the file `c:\Users\derun\bruce\Bruce\.pio\cache\tmp\pkg-installing-dec793u7\esp32p4_es\include\esp_rom\esp32p4`
+[WinError 145] Папка не пуста: 'c:\\Users\\derun\\bruce\\Bruce\\.pio\\cache\\tmp\\pkg-installing-dec793u7\\esp32p4_es\\include\\esp_driver_ana_cmpr' 
+Please manually remove the file `c:\Users\derun\bruce\Bruce\.pio\cache\tmp\pkg-installing-dec793u7\esp32p4_es\include\esp_driver_ana_cmpr`
+[WinError 145] Папка не пуста: 'c:\\Users\\derun\\bruce\\Bruce\\.pio\\cache\\tmp\\pkg-installing-dec793u7\\esp32p4_es\\include\\esp_driver_i2s' 
+Please manually remove the file `c:\Users\derun\bruce\Bruce\.pio\cache\tmp\pkg-installing-dec793u7\esp32p4_es\include\esp_driver_i2s`
+[WinError 145] Папка не пуста: 'c:\\Users\\derun\\bruce\\Bruce\\.pio\\cache\\tmp\\pkg-installing-dec793u7\\esp32p4_es\\include\\esp_rom' 
+Please manually remove the file `c:\Users\derun\bruce\Bruce\.pio\cache\tmp\pkg-installing-dec793u7\esp32p4_es\include\esp_rom`
+[WinError 145] Папка не пуста: 'c:\\Users\\derun\\bruce\\Bruce\\.pio\\cache\\tmp\\pkg-installing-dec793u7\\esp32p4_es\\include' 
+Please manually remove the file `c:\Users\derun\bruce\Bruce\.pio\cache\tmp\pkg-installing-dec793u7\esp32p4_es\include`
+[WinError 32] Процесс не может получить доступ к файлу, так как этот файл занят другим процессом: 'c:\\Users\\derun\\bruce\\Bruce\\.pio\\cache\\tmp\\pkg-installing-dec793u7\\esp32s2\\include\\spiffs\\include\\spiffs_config.h' 
+Please manually remove the file `c:\Users\derun\bruce\Bruce\.pio\cache\tmp\pkg-installing-dec793u7\esp32s2\include\spiffs\include\spiffs_config.h`
+[WinError 145] Папка не пуста: 'c:\\Users\\derun\\bruce\\Bruce\\.pio\\cache\\tmp\\pkg-installing-dec793u7\\esp32s2\\include\\spiffs\\include' 
+Please manually remove the file `c:\Users\derun\bruce\Bruce\.pio\cache\tmp\pkg-installing-dec793u7\esp32s2\include\spiffs\include`
+[WinError 145] Папка не пуста: 'c:\\Users\\derun\\bruce\\Bruce\\.pio\\cache\\tmp\\pkg-installing-dec793u7\\esp32s2\\include\\spiffs' 
+Please manually remove the file `c:\Users\derun\bruce\Bruce\.pio\cache\tmp\pkg-installing-dec793u7\esp32s2\include\spiffs`
+[WinError 145] Папка не пуста: 'c:\\Users\\derun\\bruce\\Bruce\\.pio\\cache\\tmp\\pkg-installing-dec793u7\\esp32s2\\include' 
+Please manually remove the file `c:\Users\derun\bruce\Bruce\.pio\cache\tmp\pkg-installing-dec793u7\esp32s2\include`
+[WinError 145] Папка не пуста: 'c:\\Users\\derun\\bruce\\Bruce\\.pio\\cache\\tmp\\pkg-installing-dec793u7\\esp32p4_es' 
+Please manually remove the file `c:\Users\derun\bruce\Bruce\.pio\cache\tmp\pkg-installing-dec793u7\esp32p4_es`
+[WinError 145] Папка не пуста: 'c:\\Users\\derun\\bruce\\Bruce\\.pio\\cache\\tmp\\pkg-installing-dec793u7\\esp32s2' 
+Please manually remove the file `c:\Users\derun\bruce\Bruce\.pio\cache\tmp\pkg-installing-dec793u7\esp32s2`
+[WinError 145] Папка не пуста: 'c:\\Users\\derun\\bruce\\Bruce\\.pio\\cache\\tmp\\pkg-installing-dec793u7' 
+Please manually remove the file `c:\Users\derun\bruce\Bruce\.pio\cache\tmp\pkg-installing-dec793u7`
+Tool Manager: framework-arduinoespressif32-libs@5.5.0+sha.8410210c9a has been installed!
+Library Manager: Installing h2zero/NimBLE-Arduino
+Library Manager: Installing h2zero/NimBLE-Arduino
+Library Manager: Installing h2zero/NimBLE-Arduino
+Library Manager: Installing whywilson/ESP-PN532-UART
+Verbose mode can be enabled via `-v, --verbose` option
+pio pkg exec -p toolchain-xtensa-esp32s3 -- xtensa-esp32s3-elf-objcopy --weaken-symbol=ieee80211_raw_frame_sanity_check C:\Users\derun\.platformio\packages\framework-arduinoespressif32-libs\esp32s3\lib\libnet80211.a C:\Users\derun\.platformio\packages\framework-arduinoespressif32-libs\esp32s3\lib\libnet80211.a.patched
+"pio" \xad\xa5 \uf8ab\xef\xa5\xe2\xe1\xef \xa2\xad\xe3\xe2\u096d\xad\xa5\xa9 \xa8\xab\xa8 \xa2\xad\xa5\u8b65\xa9
+\xaa\xae\xac\xa0\xad\xa4\xae\xa9, \xa8\u1bee\xab\xad\uf96c\xae\xa9 \xaf\u0ba3\u082c\xac\xae\xa9 \xa8\xab\xa8 \xaf\xa0\xaa\xa5\xe2\xad\xeb\xac \u4829\xab\xae\xac.
+*** Error 1
+FileNotFoundError: [WinError 2] Не удается найти указанный файл: 'C:\\Users\\derun\\.platformio\\packages\\framework-arduinoespressif32-libs\\esp32s3\\lib\\libnet80211.a.patched' -> 'C:\\Users\\derun\\.platformio\\packages\\framework-arduinoespressif32-libs\\esp32s3\\lib\\libnet80211.a':
+  File "C:\Users\derun\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\LocalCache\local-packages\Python313\site-packages\platformio\builder\main.py", line 167:
+    env.SConscript(env.GetExtraScripts("pre"), exports="env")
+  File "C:\Users\derun\.platformio\packages\tool-scons\scons-local-4.8.1\SCons\Script\SConscript.py", line 620:
+    return _SConscript(self.fs, *files, **subst_kw)
+  File "C:\Users\derun\.platformio\packages\tool-scons\scons-local-4.8.1\SCons\Script\SConscript.py", line 280:
+    exec(compile(scriptdata, scriptname, 'exec'), call_stack[-1].globals)
+  File "C:\Users\derun\bruce\Bruce\patch.py", line 42:
+    rename(patched_file, original_file)
+========================= [FAILED] Took 388.79 seconds =========================
+
+Environment            Status    Duration
+---------------------  --------  ------------
+lilygo-t-embed-cc1101  FAILED    00:06:28.791
+==================== 1 failed, 0 succeeded in 00:06:28.791 ====================

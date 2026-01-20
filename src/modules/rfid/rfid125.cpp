@@ -36,8 +36,7 @@ void RFID125::loop() {
     while (1) {
         if (check(EscPress)) {
             _stream->end();
-            returnToMenu = true;
-            break;
+            break; // Return to previous menu level
         }
 
         if (check(SelPress)) { select_state(); }

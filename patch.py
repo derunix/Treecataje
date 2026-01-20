@@ -25,16 +25,49 @@ if not isfile(join(FRAMEWORK_DIR,mcu, "lib", ".patched")):
         FRAMEWORK_DIR, mcu, "lib", "libnet80211.a.patched"
     )
 
+    # Get toolchain path directly to avoid pio pkg exec issues on Windows
+    import subprocess
+    import shutil
+
     if mcu=="esp32c5":
-        env.Execute(
-            "pio pkg exec -p toolchain-riscv32-esp -- riscv32-esp-elf-objcopy  --weaken-symbol=ieee80211_raw_frame_sanity_check %s %s"
-            % (original_file, patched_file)
-        )
+        objcopy_name = "riscv32-esp-elf-objcopy"
+        toolchain_pkg = "toolchain-riscv32-esp"
     else:
-        env.Execute(
-            "pio pkg exec -p toolchain-xtensa-%s -- xtensa-%s-elf-objcopy  --weaken-symbol=ieee80211_raw_frame_sanity_check %s %s"
-            % (mcu, mcu, original_file, patched_file)
-        )
+        objcopy_name = f"xtensa-{mcu}-elf-objcopy"
+        toolchain_pkg = f"toolchain-xtensa-{mcu}"
+
+    # Try to find objcopy in PATH or platformio packages
+    objcopy_path = shutil.which(objcopy_name)
+    if not objcopy_path:
+        # Try platformio packages directory
+        import os
+        pio_packages = os.path.expanduser("~/.platformio/packages")
+        possible_paths = [
+            join(pio_packages, toolchain_pkg, "bin", objcopy_name + ".exe"),
+            join(pio_packages, toolchain_pkg, "bin", objcopy_name),
+            join(pio_packages, "toolchain-xtensa-esp-elf", "bin", objcopy_name + ".exe"),
+            join(pio_packages, "toolchain-xtensa-esp-elf", "bin", objcopy_name),
+        ]
+        for p in possible_paths:
+            if isfile(p):
+                objcopy_path = p
+                break
+
+    if objcopy_path:
+        cmd = f'"{objcopy_path}" --weaken-symbol=ieee80211_raw_frame_sanity_check "{original_file}" "{patched_file}"'
+        env.Execute(cmd)
+    else:
+        # Fallback to original method
+        if mcu=="esp32c5":
+            env.Execute(
+                "pio pkg exec -p toolchain-riscv32-esp -- riscv32-esp-elf-objcopy  --weaken-symbol=ieee80211_raw_frame_sanity_check %s %s"
+                % (original_file, patched_file)
+            )
+        else:
+            env.Execute(
+                "pio pkg exec -p toolchain-xtensa-%s -- xtensa-%s-elf-objcopy  --weaken-symbol=ieee80211_raw_frame_sanity_check %s %s"
+                % (mcu, mcu, original_file, patched_file)
+            )
 
     if isfile("%s.old" % (original_file)):
         remove("%s.old" % (original_file))

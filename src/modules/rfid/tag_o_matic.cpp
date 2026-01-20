@@ -66,8 +66,7 @@ void TagOMatic::setup() {
 void TagOMatic::loop() {
     while (1) {
         if (check(EscPress)) {
-            returnToMenu = true;
-            break;
+            break; // Return to previous menu level
         }
 
         if (check(SelPress)) { select_state(); }

@@ -66,7 +66,7 @@ void GPSTracker::end() {
     gps_provider_end();
     restorePins();
 
-    returnToMenu = true;
+    // returnToMenu removed - function returns normally, allowing back navigation
     gpsConnected = false;
 }
 
@@ -221,8 +221,7 @@ void GPSTracker::add_coord() {
     FS *fs;
     if (!getFsStorage(fs)) {
         padprintln("Storage setup error");
-        returnToMenu = true;
-        return;
+        return; // Return to previous menu
     }
 
     if (filename == "") create_filename();
@@ -235,8 +234,7 @@ void GPSTracker::add_coord() {
 
     if (!file) {
         padprintln("Failed to open file for writing");
-        returnToMenu = true;
-        return;
+        return; // Return to previous menu
     }
 
     if (is_new_file) add_initial_file_data(file);

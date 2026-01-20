@@ -79,7 +79,7 @@ void rf_spectrum() {
         if (setMHZMenu()) yield();
         vTaskDelay(pdMS_TO_TICKS(10));
     }
-    returnToMenu = true;
+    // returnToMenu removed - function returns normally, allowing back navigation
     rmt_disable(rx_ch);
     rmt_del_channel(rx_ch);
     vQueueDelete(receive_queue);
@@ -142,7 +142,7 @@ PRINT:
         if (setMHZMenu()) goto PRINT;
         vTaskDelay(pdMS_TO_TICKS(10));
     }
-    returnToMenu = true;
+    // returnToMenu removed - function returns normally, allowing back navigation
 }
 
 void rf_CC1101_rssi() {

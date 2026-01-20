@@ -200,6 +200,10 @@ void ssh_loop(void *pvParameters) {
     int nbytes;
     keyStroke key;
     while (1) {
+        // Check for ESC button to exit SSH session
+        if (check(EscPress)) {
+            break;
+        }
 #ifdef HAS_KEYBOARD
         key = _getKeyPress();
         if (key.pressed) {
@@ -360,9 +364,17 @@ void telnet_loop() {
     String commandInput;
 
     while (1) {
+        // Check for ESC button to exit Telnet session
+        if (check(EscPress)) {
+            break;
+        }
         tft.print("> ");
         // waitForInput(commandInput);
         commandInput = keyboard("", 76, "COMMAND");
+        // Check if user pressed ESC in keyboard function
+        if (commandInput == "\x1B") {
+            break;
+        }
         const char *command = commandInput.c_str();
         send(sock, command, strlen(command), 0);
 
