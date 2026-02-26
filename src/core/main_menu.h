@@ -21,6 +21,7 @@
 #include "menu_items/WifiMenu.h"
 #include "menu_items/RadioMenu.h"
 #include "menu_items/PowerMenu.h"
+#include "menu_items/AudioMenu.h"
 class MainMenu {
 public:
     FileMenu fileMenu;
@@ -39,6 +40,9 @@ public:
     WifiMenu wifiMenu;
     RadioMenu radioMenu;
     PowerMenu powerMenu;
+#if defined(MIC_SPM1423) || defined(HAS_NS4168_SPKR)
+    AudioMenu audioMenu;
+#endif
 #if !defined(LITE_VERSION)
     LoRaMenu loraMenu;
     EthernetMenu ethernetMenu;

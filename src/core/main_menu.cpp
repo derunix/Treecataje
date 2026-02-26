@@ -27,6 +27,9 @@ MainMenu::MainMenu() {
 #endif
         &othersMenu,
         &radioMenu,
+#if defined(MIC_SPM1423) || defined(HAS_NS4168_SPKR)
+        &audioMenu,
+#endif
         &clockMenu,
 #if !defined(LITE_VERSION)
         &connectMenu,

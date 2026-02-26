@@ -3,9 +3,6 @@
 
 #include "core/batteryLogger.h"
 #include "core/emergencyReboot.h"
-#include "core/menu_items/AudioMenu.h"
-#include "core/menu_items/PowerMenu.h"
-#include "core/menu_items/RadioMenu.h"
 #include "core/powerSave.h"
 #include "core/serial_commands/cli.h"
 #include "core/systemStatus.h"
