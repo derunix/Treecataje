@@ -10,7 +10,6 @@ public:
     void optionsMenu(void);
     void configMenu(void);
     void drawIcon(float scale);
-    void drawIconImg();
     bool hasTheme() { return bruceConfig.theme.nrf; }
     String themePath() { return bruceConfig.theme.paths.nrf; }
 

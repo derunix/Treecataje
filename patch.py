@@ -60,7 +60,7 @@ if not isfile(join(FRAMEWORK_DIR,mcu, "lib", ".patched")):
                 objcopy_path = p
                 break
 
-    if objcopy_path:
+    if objcopy_name is not None and objcopy_path:
         cmd = f'"{objcopy_path}" --weaken-symbol=ieee80211_raw_frame_sanity_check "{original_file}" "{patched_file}"'
         env.Execute(cmd)
     elif objcopy_name is not None:

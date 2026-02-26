@@ -272,7 +272,7 @@ void Wardriving::scanWiFiBLE() {
         );
     }
 
-    padprintf("Coord: %.6f, %.6f\n", gps.location.lat(), gps.location.lng());
+    padprintf("Coord: %.6f, %.6f\n", fix.lat_deg, fix.lon_deg);
     padprintln("Start Scanning...");
 
     if (scanBLE && pBLEScan != nullptr && pBLEScan->isScanning()) {
@@ -303,19 +303,19 @@ void Wardriving::scanWiFiBLE() {
                     macAddress.c_str(),
                     WiFi.SSID(i).c_str(),
                     auth_mode_to_string(WiFi.encryptionType(i)).c_str(),
-                    gps.date.year(),
-                    gps.date.month(),
-                    gps.date.day(),
-                    gps.time.hour(),
-                    gps.time.minute(),
-                    gps.time.second(),
+                    fix.year,
+                    fix.month,
+                    fix.day,
+                    fix.hour,
+                    fix.min,
+                    fix.sec,
                     channel,
                     channel != 14 ? 2407 + (channel * 5) : 2484,
                     WiFi.RSSI(i),
-                    gps.location.lat(),
-                    gps.location.lng(),
-                    gps.altitude.meters(),
-                    gps.hdop.hdop() * 1.0
+                    fix.lat_deg,
+                    fix.lon_deg,
+                    fix.alt_m,
+                    fix.hdop * 1.0
                 );
                 file.print(buffer);
 
@@ -412,17 +412,17 @@ void Wardriving::scanWiFiBLE() {
                     "%s,\"%s\",Misc [BLE],%04d-%02d-%02d %02d:%02d:%02d,0,,%d,%f,%f,%f,%f,,%s,BLE\n",
                     address.c_str(),
                     name.c_str(),
-                    gps.date.year(),
-                    gps.date.month(),
-                    gps.date.day(),
-                    gps.time.hour(),
-                    gps.time.minute(),
-                    gps.time.second(),
+                    fix.year,
+                    fix.month,
+                    fix.day,
+                    fix.hour,
+                    fix.min,
+                    fix.sec,
                     rssi,
-                    gps.location.lat(),
-                    gps.location.lng(),
-                    gps.altitude.meters(),
-                    gps.hdop.hdop() * 1.0,
+                    fix.lat_deg,
+                    fix.lon_deg,
+                    fix.alt_m,
+                    fix.hdop * 1.0,
                     manufacturerIdStr
                 );
                 file.print(buffer);
