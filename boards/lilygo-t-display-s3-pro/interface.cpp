@@ -93,6 +93,20 @@ int getBattery() {
     return (percent < 0) ? 1 : (percent >= 100) ? 100 : percent;
 }
 
+/***************************************************************************************
+** Function name: getBatteryVoltage()
+** Description:   Returns the current battery voltage (in Volts) if supported
+***************************************************************************************/
+float getBatteryVoltage() {
+    return PMU.getSystemVoltage() / 1000.0f;
+}
+
+/***************************************************************************************
+** Function name: isCharging()
+** Description:   Determines if the device is charging
+***************************************************************************************/
+bool isCharging() { return false; }
+
 /*********************************************************************
 ** Function: setBrightness
 ** location: settings.cpp

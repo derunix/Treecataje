@@ -416,6 +416,31 @@ void InputHandler(void) {
     }
 }
 
+/***************************************************************************************
+** Function name: getBattery()
+** Description:   Delivers the battery value from 1-100
+***************************************************************************************/
+int getBattery() { return 0; }
+
+/***************************************************************************************
+** Function name: getBatteryVoltage()
+** Description:   Returns the current battery voltage (in Volts) if supported
+***************************************************************************************/
+float getBatteryVoltage() { return 0.0f; }
+
+/***************************************************************************************
+** Function name: isCharging()
+** Description:   Determines if the device is charging
+***************************************************************************************/
+bool isCharging() { return false; }
+
+/*********************************************************************
+** Function: goToDeepSleep
+** location: mykeyboard.cpp
+** Puts the device into DeepSleep
+**********************************************************************/
+void goToDeepSleep() {}
+
 /*********************************************************************
 ** Function: powerOff
 ** location: mykeyboard.cpp

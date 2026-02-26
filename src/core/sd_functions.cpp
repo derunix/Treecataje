@@ -35,6 +35,16 @@ bool setupSdCard() {
 #endif
     // avoid unnecessary remounting
     if (sdcardMounted) return true;
+
+    // Rate limit mount attempts to avoid UI freeze when SD card is not present
+    static uint32_t lastMountAttempt = 0;
+    static bool lastMountFailed = false;
+    uint32_t now = millis();
+    if (lastMountFailed && (now - lastMountAttempt) < 10000) {
+        // Skip mount attempt if last one failed less than 10 seconds ago
+        return false;
+    }
+    lastMountAttempt = now;
     bool result = true;
     bool task = false; // devices that doesn't use InputHandler task
 #ifdef USE_TFT_eSPI_TOUCH
@@ -92,11 +102,13 @@ bool setupSdCard() {
         Serial.println("SDCARD NOT mounted, check wiring and format");
         log_e("setupSdCard: mount failed");
         sdcardMounted = false;
+        lastMountFailed = true;
         return false;
     } else {
         Serial.println("SDCARD mounted successfully");
         log_i("setupSdCard: mount succeeded");
         sdcardMounted = true;
+        lastMountFailed = false;
         return true;
     }
 }

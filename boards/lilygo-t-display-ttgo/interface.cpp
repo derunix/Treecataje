@@ -70,6 +70,24 @@ void _setup_gpio() {
     Serial.begin(115200);
 }
 
+/***************************************************************************************
+** Function name: getBattery()
+** Description:   Delivers the battery value from 1-100
+***************************************************************************************/
+int getBattery() { return 0; }
+
+/***************************************************************************************
+** Function name: getBatteryVoltage()
+** Description:   Returns the current battery voltage (in Volts) if supported
+***************************************************************************************/
+float getBatteryVoltage() { return 0.0f; }
+
+/***************************************************************************************
+** Function name: isCharging()
+** Description:   Default implementation that returns false
+***************************************************************************************/
+bool isCharging() { return false; }
+
 /*********************************************************************
 **  Function: setBrightness
 **  set brightness value

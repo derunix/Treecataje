@@ -85,6 +85,12 @@ void _post_setup_gpio() {
 int getBattery() { return 0; }
 
 /***************************************************************************************
+** Function name: getBatteryVoltage()
+** Description:   Returns the current battery voltage (in Volts) if supported
+***************************************************************************************/
+float getBatteryVoltage() { return 0.0f; }
+
+/***************************************************************************************
 ** Function name: isCharging()
 ** Description:   Default implementation that returns false
 ***************************************************************************************/

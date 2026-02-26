@@ -37,6 +37,24 @@ void _setup_gpio() {
     digitalWrite(pin_shared_ctrl, HIGH); // Keep the SD card selected.
 }
 
+/***************************************************************************************
+** Function name: getBattery()
+** Description:   Delivers the battery value from 1-100
+***************************************************************************************/
+int getBattery() { return 0; }
+
+/***************************************************************************************
+** Function name: getBatteryVoltage()
+** Description:   Returns the current battery voltage (in Volts) if supported
+***************************************************************************************/
+float getBatteryVoltage() { return 0.0f; }
+
+/***************************************************************************************
+** Function name: isCharging()
+** Description:   Default implementation that returns false
+***************************************************************************************/
+bool isCharging() { return false; }
+
 /*********************************************************************
 ** Function: setBrightness
 ** location: settings.cpp

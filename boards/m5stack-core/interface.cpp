@@ -22,6 +22,22 @@ int getBattery() {
     return (percent < 0) ? 1 : (percent >= 100) ? 100 : percent;
 }
 
+/***************************************************************************************
+** Function name: getBatteryVoltage()
+** Description:   Returns the current battery voltage (in Volts) if supported
+***************************************************************************************/
+float getBatteryVoltage() {
+    return M5.Power.getBatteryVoltage() / 1000.0f;
+}
+
+/***************************************************************************************
+** Function name: isCharging()
+** Description:   Determines if the device is charging
+***************************************************************************************/
+bool isCharging() {
+    return M5.Power.getBatteryCurrent() > 0;
+}
+
 /*********************************************************************
 ** Function: setBrightness
 ** location: settings.cpp

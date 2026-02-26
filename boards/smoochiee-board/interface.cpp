@@ -72,6 +72,14 @@ int getBattery() {
     return percent;
 }
 
+/***************************************************************************************
+** Function name: getBatteryVoltage()
+** Description:   Returns the current battery voltage (in Volts) if supported
+***************************************************************************************/
+float getBatteryVoltage() {
+    return PPM.getBattVoltage() / 1000.0f;
+}
+
 /*********************************************************************
 ** Function: setBrightness
 ** location: settings.cpp

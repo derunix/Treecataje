@@ -6,6 +6,10 @@
 #include <algorithm>
 #include <cstring>
 #include <globals.h>
+
+// Audio codec setup - weak function defined in interface.cpp
+void _setup_codec_speaker(bool enable) __attribute__((weak));
+void _setup_codec_speaker(bool enable) {}
 #if defined(ESP8266)
 #include <ESP8266WiFi.h>
 #else
@@ -323,6 +327,9 @@ void RadioPlayer::attachCallbacks(AudioFileSourceHTTPSStream *source, AudioFileS
 bool RadioPlayer::startPipeline(const String &url, const String &mimeHint) {
     _mime = mimeHint.length() ? mimeHint : guessMime(url);
 
+    // Enable audio codec if available (for Cardputer ADV with ES8311)
+    _setup_codec_speaker(true);
+
     _output = new AudioOutputI2S();
     if (!_output || !configureOutput(_output)) {
         setStatus(RadioPlayerStatus::Error, "Missing I2S pinout");
@@ -330,6 +337,7 @@ bool RadioPlayer::startPipeline(const String &url, const String &mimeHint) {
         RADIO_LOGW("I2S pinout missing/configure failed");
         returnToMenu = true;
         resetAudioChain();
+        _setup_codec_speaker(false);
         return false;
     }
     if (!_output->begin()) {
@@ -495,6 +503,8 @@ void RadioPlayer::stop() {
     RADIO_LOGI("Stop requested");
     if (_status != RadioPlayerStatus::Idle) { addLog("Stopping playback"); }
     resetAudioChain();
+    // Disable audio codec
+    _setup_codec_speaker(false);
     _hasStation = false;
     _status = RadioPlayerStatus::Idle;
     _statusText = "Idle";

@@ -131,6 +131,20 @@ int getBattery() {
     return percent;
 }
 
+/***************************************************************************************
+** Function name: getBatteryVoltage()
+** Description:   Returns the current battery voltage (in Volts) if supported
+***************************************************************************************/
+float getBatteryVoltage() {
+    return axp192.getBatteryVoltage() / 1000.0f;
+}
+
+/***************************************************************************************
+** Function name: isCharging()
+** Description:   Determines if the device is charging
+***************************************************************************************/
+bool isCharging() { return axp192.isCharging(); }
+
 /*********************************************************************
 ** Function: setBrightness
 ** location: settings.cpp

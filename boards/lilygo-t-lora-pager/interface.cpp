@@ -288,6 +288,20 @@ int getBattery() {
     return static_cast<int>(std::ceil(smoothed));
 }
 
+/***************************************************************************************
+** Function name: getBatteryVoltage()
+** Description:   Returns the current battery voltage (in Volts) if supported
+***************************************************************************************/
+float getBatteryVoltage() {
+    return bq.getVolt(VOLT) / 1000.0f;
+}
+
+/***************************************************************************************
+** Function name: isCharging()
+** Description:   Determines if the device is charging
+***************************************************************************************/
+bool isCharging() { return false; }
+
 /*********************************************************************
 **  Function: setBrightness
 **  set brightness value
