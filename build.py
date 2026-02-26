@@ -98,17 +98,15 @@ def _merge_bins_callback(target, source, env):
             print("[merge_bin] Error: firmware.bin exceeds OTA partition size")
             env.Exit(1)
 
-    cmd_parts = [
-        q(python_exe),
-        q(esptool_py),
+    cmd = " ".join([
+        q(python_exe), "-m", "platformio", "pkg", "exec", "-p", q("tool-esptoolpy"), "--", "esptool.py",
         "--chip", chip_arg,
         "merge-bin",
         "--output", q(out_bin),
         hex(boot_offset), q(boot_bin),
         hex(PART_TABLE_OFFSET), q(part_bin),
         hex(APP_OFFSET), q(app_bin),
-    ]
-    cmd = " ".join(cmd_parts)
+    ])
 
     print("[merge_bin] Merging binaries:")
     print(" ", cmd)

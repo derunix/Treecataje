@@ -29,16 +29,23 @@ if not isfile(join(FRAMEWORK_DIR,mcu, "lib", ".patched")):
     import subprocess
     import shutil
 
-    if mcu=="esp32c5":
+    if mcu=="esp32c5" or mcu=="esp32c6":
         objcopy_name = "riscv32-esp-elf-objcopy"
         toolchain_pkg = "toolchain-riscv32-esp"
+    elif mcu=="esp32p4":
+        objcopy_name = None  # esp32p4 doesn't need patching
+        toolchain_pkg = None
     else:
         objcopy_name = f"xtensa-{mcu}-elf-objcopy"
         toolchain_pkg = f"toolchain-xtensa-{mcu}"
 
-    # Try to find objcopy in PATH or platformio packages
-    objcopy_path = shutil.which(objcopy_name)
-    if not objcopy_path:
+    # esp32p4 doesn't need patching
+    if objcopy_name is None:
+        objcopy_path = None
+    else:
+        # Try to find objcopy in PATH or platformio packages
+        objcopy_path = shutil.which(objcopy_name)
+    if objcopy_name is not None and not objcopy_path:
         # Try platformio packages directory
         import os
         pio_packages = os.path.expanduser("~/.platformio/packages")
@@ -56,9 +63,9 @@ if not isfile(join(FRAMEWORK_DIR,mcu, "lib", ".patched")):
     if objcopy_path:
         cmd = f'"{objcopy_path}" --weaken-symbol=ieee80211_raw_frame_sanity_check "{original_file}" "{patched_file}"'
         env.Execute(cmd)
-    else:
+    elif objcopy_name is not None:
         # Fallback to original method
-        if mcu=="esp32c5":
+        if mcu in ("esp32c5", "esp32c6"):
             env.Execute(
                 "pio pkg exec -p toolchain-riscv32-esp -- riscv32-esp-elf-objcopy  --weaken-symbol=ieee80211_raw_frame_sanity_check %s %s"
                 % (original_file, patched_file)
@@ -71,8 +78,16 @@ if not isfile(join(FRAMEWORK_DIR,mcu, "lib", ".patched")):
 
     if isfile("%s.old" % (original_file)):
         remove("%s.old" % (original_file))
-    rename(original_file, "%s.old" % (original_file))
-    rename(patched_file, original_file)
+
+    if isfile(original_file):
+        rename(original_file, "%s.old" % (original_file))
+    else:
+        print("Patch: Original file not found")
+
+    if isfile(patched_file):
+        rename(patched_file, original_file)
+    else:
+        print("Patch: Patched file not found")
 
 
     def _touch(path):

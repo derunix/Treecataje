@@ -12,16 +12,6 @@ void RadioMenu::optionsMenu() {
     loopOptions(options, MENU_TYPE_SUBMENU, "Radio");
 }
 
-void RadioMenu::drawIconImg() {
-    drawImg(
-        *bruceConfig.themeFS(),
-        bruceConfig.getThemeItemImg(bruceConfig.theme.paths.radio),
-        0,
-        imgCenterY,
-        true
-    );
-}
-
 void RadioMenu::drawIcon(float scale) {
     clearIconArea();
     int bodyW = scale * 70;

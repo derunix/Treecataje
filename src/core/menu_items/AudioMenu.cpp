@@ -26,16 +26,6 @@ void AudioMenu::optionsMenu() {
     loopOptions(options, MENU_TYPE_SUBMENU, "Audio");
 }
 
-void AudioMenu::drawIconImg() {
-    drawImg(
-        *bruceConfig.themeFS(),
-        bruceConfig.getThemeItemImg(bruceConfig.theme.paths.audio),
-        0,
-        imgCenterY,
-        true
-    );
-}
-
 void AudioMenu::drawIcon(float scale) {
     clearIconArea();
     int bodyW = scale * 48;

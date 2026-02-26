@@ -136,16 +136,6 @@ void PowerMenu::optionsMenu() {
     loopOptions(options, MENU_TYPE_SUBMENU, "Power");
 }
 
-void PowerMenu::drawIconImg() {
-    drawImg(
-        *bruceConfig.themeFS(),
-        bruceConfig.getThemeItemImg(bruceConfig.theme.paths.others),
-        0,
-        imgCenterY,
-        true
-    );
-}
-
 void PowerMenu::drawIcon(float scale) {
     clearIconArea();
     int battW = scale * 60;
