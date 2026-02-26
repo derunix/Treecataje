@@ -15,6 +15,7 @@
 #include "modules/wifi/scan_hosts.h"
 #include "modules/wifi/sniffer.h"
 #include "modules/wifi/wifi_atks.h"
+#include "modules/wifi/wifi_presence.h"
 
 
 
@@ -155,6 +156,7 @@ void WifiMenu::sniffersMenu() {
 
     options.push_back({"Raw Sniffer", sniffer_setup});
     options.push_back({"Probe Sniffer", karma_setup});
+    options.push_back({"Presence Monitor", wifi_presence_monitor});
     options.push_back({"Back", [this]() { optionsMenu(); }});
 
     loopOptions(options, MENU_TYPE_SUBMENU, "Sniffers");

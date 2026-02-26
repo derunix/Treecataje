@@ -4,6 +4,7 @@
 #include "core/utils.h"
 #include "modules/badusb_ble/ducky_typer.h"
 #include "modules/ble/ble_common.h"
+#include "modules/ble/ble_meshtastic.h"
 #include "modules/ble/ble_ninebot.h"
 #include "modules/ble/ble_spam.h"
 #include <globals.h>
@@ -28,6 +29,7 @@ void BleMenu::optionsMenu() {
     options.push_back({"Media Cmds", [=]() { MediaCommands(hid_ble, true); }});
 #if !defined(LITE_VERSION)
     options.push_back({"Presenter", [=]() { PresenterMode(hid_ble, true); }});
+    options.push_back({"Meshtastic", ble_meshtastic_menu});
     options.push_back({"BLE Scan", ble_scan});
     options.push_back({"iBeacon", [=]() { ibeacon(); }});
     options.push_back({"Bad BLE", [=]() { ducky_setup(hid_ble, true); }});

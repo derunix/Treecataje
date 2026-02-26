@@ -36,7 +36,7 @@ OverlayRect overlayRect() {
 
 void captureOverlayArea(const OverlayRect &rect) {
     state.overlayBackup.resize(rect.w * rect.h);
-    tft.readRect(rect.x, rect.y, rect.w, rect.h, state.overlayBackup.data());
+    tft.native()->readRect(rect.x, rect.y, rect.w, rect.h, state.overlayBackup.data());
 }
 
 void restoreOverlayArea(const OverlayRect &rect) {
@@ -57,9 +57,9 @@ void drawCountdown(uint32_t remainingSeconds) {
     const auto rect = overlayRect();
     if (!state.overlayVisible) captureOverlayArea(rect);
 
-    uint8_t oldTextSize = tft.textsize;
-    uint32_t oldTextColor = tft.textcolor;
-    uint32_t oldBgColor = tft.textbgcolor;
+    uint8_t oldTextSize = tft.getTextSize();
+    uint32_t oldTextColor = tft.getTextColor();
+    uint32_t oldBgColor = tft.getTextBgColor();
 
     tft.fillRoundRect(rect.x, rect.y, rect.w, rect.h, 7, TFT_RED);
     tft.setTextColor(TFT_WHITE, TFT_RED);

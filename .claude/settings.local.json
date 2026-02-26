@@ -25,7 +25,13 @@
       "Bash(python -m platformio pkg install:*)",
       "Bash(cmd.exe /c \"python -m platformio run -e lilygo-t-embed-cc1101 -d C:\\\\Users\\\\derun\\\\bruce\\\\Bruce\")",
       "Bash(C:/Users/derun/.platformio/penv/Scripts/pio.exe run -e lilygo-t-embed-cc1101 -d \"c:/Users/derun/bruce/Bruce\")",
-      "Bash(/c/Users/derun/.platformio/penv/Scripts/platformio.exe run --environment m5stack-cardputer)"
+      "Bash(/c/Users/derun/.platformio/penv/Scripts/platformio.exe run --environment m5stack-cardputer)",
+      "Bash(\"C:/Users/derun/.platformio/packages/toolchain-xtensa-esp-elf/bin/xtensa-esp32s3-elf-gcc.exe\" -v -x c /dev/null -fsyntax-only)",
+      "Bash(python3 -c \"import json; data=json.load\\(open\\(''C:/Users/derun/.platformio/packages/toolchain-xtensa-esp-elf/package.json''\\)\\); print\\(data\\)\")",
+      "Bash(python3 -c \"import json,sys; d=json.load\\(sys.stdin\\); print\\(d.get\\(''name''\\), d.get\\(''version''\\)\\)\")",
+      "WebFetch(domain:api.github.com)",
+      "Bash(C:/Users/derun/.platformio/penv/Scripts/python.exe -c \":*)",
+      "Bash(python3 -c \"import json,sys; d=json.load\\(sys.stdin\\); print\\(''name:'', d.get\\(''name''\\), ''version:'', d.get\\(''version''\\)\\)\")"
     ]
   }
 }
