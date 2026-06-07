@@ -46,7 +46,8 @@ def main():
         print(f"  [{'PASS' if cond else 'FAIL'}] {name}" + (f" — {detail}" if detail else ""))
 
     # construction
-    check("window built", win.tabs.count() == 4, f"{win.tabs.count()} tabs")
+    check("window built", win.tabs.count() == 5, f"{win.tabs.count()} tabs")
+    check("functions groups populated", win.fn_groups.count() >= 10, f"{win.fn_groups.count()} groups")
     check("console disabled pre-connect", not win.btn_send.isEnabled())
 
     if args.no_device:
@@ -83,6 +84,17 @@ def main():
             if "END code=" in win.txt_log.toPlainText():
                 break
         check("command round-tripped", "END code=" in win.txt_log.toPlainText())
+
+        # run a catalog command via the Functions tab (Status group -> "Free memory")
+        import companion_commands as cc
+        free_cmd = next(c for _, cmds in cc.all_groups() for c in cmds if c.template == "free")
+        win._run_catalog(free_cmd, [])
+        for _ in range(40):
+            _spin(100)
+            if "END code=" in win.txt_fn_out.toPlainText():
+                break
+        check("functions button round-tripped", "END code=" in win.txt_fn_out.toPlainText(),
+              win.txt_fn_out.toPlainText().splitlines()[-1:] )
 
     # disconnect
     win.sig_disconnect.emit()

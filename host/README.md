@@ -14,9 +14,10 @@ Current state: **Phases 0–5 done** — framed protocol over USB **and** BLE, f
 | `mcp_server.py` | MCP server (stdio) exposing the device to Claude: `device_connect/info/status/caps/busy/run/file_get/file_put/analyze/disconnect`. |
 | `companion_ble.py` | BLE GATT-central transport (bleak); same protocol as USB. |
 | `phase2_ble_test.py` / `phase3_file_test.py` | BLE handshake test / file-transfer (get+put round-trip) test. |
-| `tui.py` | Interactive TUI (Textual): connect, status panel, smart console (`:get`/`:put`/`:status`/cmd). Run: `python tui.py --port /dev/ttyACM1`. |
+| `tui.py` | Interactive TUI (Textual): connect, status panel, a **function tree** (16 groups / ~90 commands — select to run or prefill args) + smart console (`:get`/`:put`/`:status`/cmd). Run: `python tui.py --port /dev/ttyACM0`. |
 | `tui_test.py` | Headless TUI smoke test (Textual Pilot). |
-| `gui.py` | Desktop GUI (PySide6) over the same core: connection bar (usb/ble + token), device/status panels, tabs **Console / Files / Stream / Analyze**. All device I/O on one worker thread. Run: `python gui.py --port /dev/ttyACM0`. |
+| `companion_commands.py` | Shared catalog of ~90 device CLI commands in 16 capability groups (label, args, kind). One source of truth for the GUI buttons and TUI menu items. `build_command()` assembles the line. |
+| `gui.py` | Desktop GUI (PySide6) over the same core: connection bar (usb/ble + token), device/status panels, tabs **Functions / Console / Files / Stream / Analyze**. Functions = group list + a button (with arg fields) for every command; danger commands confirm. All device I/O on one worker thread. Run: `python gui.py --port /dev/ttyACM0`. |
 | `launchers/` | App-menu launchers (`.desktop` + wrappers) for the GUI/TUI. `bash launchers/install.sh` adds **Treecataje Companion (GUI/TUI)** to the menu and `companion-gui`/`companion-tui` to `~/.local/bin` (auto-detect the serial port). |
 | `gui_test.py` | Headless GUI smoke test (Qt `offscreen`) — drives the real worker/signal path against the device. `--no-device` for UI-only. |
 | `companion_compute.py` | Host-compute: analyze device captures (NRF24 scan, battery CSV, pcap, generic) with ASCII viz. `python companion_compute.py --pull /nrf_scan.log`. |

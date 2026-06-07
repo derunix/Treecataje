@@ -20,19 +20,20 @@ import argparse
 from textual import work
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical
-from textual.widgets import Header, Footer, Input, RichLog, Static
+from textual.widgets import Header, Footer, Input, RichLog, Static, Tree
 
 from companion_proto import Companion
+import companion_commands as cc
 
 DL_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "downloads")
 
 
 class CompanionTUI(App):
     CSS = """
-    #left { width: 38%; border-right: solid $primary; padding: 1; }
-    #devinfo { color: $success; }
-    #caps { color: $accent; height: auto; }
-    #status { margin-top: 1; }
+    #left { width: 42%; border-right: solid $primary; padding: 1; }
+    #devinfo { color: $success; height: auto; }
+    #status { color: $accent; height: auto; margin-bottom: 1; }
+    #cmds { height: 1fr; border: round $primary; }
     #log { border: round $primary; }
     #cmd { dock: bottom; }
     """
@@ -52,27 +53,55 @@ class CompanionTUI(App):
         self.last_devinfo = ""
         self.last_caps = ""
         self.last_status = ""
+        self.last_cmd_result = None  # (ok, code, lines) — for headless testing
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
         with Horizontal():
             with Vertical(id="left"):
                 yield Static("connecting…", id="devinfo")
-                yield Static("", id="caps")
                 yield Static("", id="status")
-                yield Static(
-                    "\n[dim]console:[/dim] cmd · :status · :caps\n"
-                    ":get <remote> [local] · :put <local> <remote> · :ls [p]",
-                    id="hint",
-                )
+                yield Tree("Functions", id="cmds")
             with Vertical():
                 yield RichLog(id="log", highlight=True, markup=True, wrap=True)
-                yield Input(placeholder="command…  (e.g. free, ls /, :status)", id="cmd")
+                yield Input(placeholder="pick a function ↖ or type a command…", id="cmd")
         yield Footer()
 
     def on_mount(self) -> None:
         self.query_one("#log", RichLog).write("[dim]opening %s…[/dim]" % self.port)
+        self._build_tree()
         self.connect()
+
+    def _build_tree(self) -> None:
+        tree = self.query_one("#cmds", Tree)
+        tree.root.expand()
+        tree.show_root = False
+        for name, cmds in cc.all_groups():
+            node = tree.root.add(name)
+            for cmd in cmds:
+                node.add_leaf(cmd.label, data=cmd)
+
+    def on_tree_node_selected(self, event: Tree.NodeSelected) -> None:
+        cmd = event.node.data
+        if cmd is None:  # a group header: toggle expand
+            return
+        inp = self.query_one("#cmd", Input)
+        if not cmd.args and cmd.kind != "danger":
+            # safe, no-arg command -> run immediately
+            self.write_log(f"[dim]{cmd.desc}[/dim]" if cmd.desc else "")
+            self.run_command(cmd.template + (" " + cmd.suffix if cmd.suffix else ""))
+            return
+        # needs args or is destructive -> prefill the input, let the user confirm
+        defaults = " ".join(a.default for a in cmd.args).strip()
+        line = cmd.template + (" " + defaults if defaults else " ")
+        if cmd.suffix and not cmd.args:
+            line = cmd.template + " " + cmd.suffix
+        inp.value = line
+        inp.focus()
+        argnames = " ".join(f"<{a.name}>" for a in cmd.args)
+        warn = "[red]⚠ destructive — [/red]" if cmd.kind == "danger" else ""
+        self.write_log(f"{warn}[cyan]{cmd.label}[/cyan]: {argnames or '(no args)'}  "
+                       f"— Enter to run" + (f"  [dim]({cmd.desc})[/dim]" if cmd.desc else ""))
 
     def write_log(self, msg: str) -> None:
         self.query_one("#log", RichLog).write(msg)
@@ -87,10 +116,10 @@ class CompanionTUI(App):
                 self.query_one("#devinfo", Static).update("[red]HELLO failed[/red]")
                 self.write_log("[red]HELLO failed[/red]")
                 return
-            self.last_devinfo = f"[b]{info.get('fw')}[/b]\n{info.get('board')}  mtu={info.get('mtu')}"
-            self.last_caps = "caps: " + ", ".join(info.get("caps", []))
+            self.last_caps = ", ".join(info.get("caps", []))
+            self.last_devinfo = (f"[b]{info.get('fw')}[/b]\n{info.get('board')}  mtu={info.get('mtu')}\n"
+                                 f"[dim]caps:[/dim] {self.last_caps}")
             self.query_one("#devinfo", Static).update(self.last_devinfo)
-            self.query_one("#caps", Static).update(self.last_caps)
             self.write_log("[green]connected[/green] " + str(info.get("fw")))
             self.action_refresh()
         except Exception as e:  # noqa: BLE001
@@ -149,6 +178,7 @@ class CompanionTUI(App):
                 self.write_log("  " + line)
             tag = "green" if r.ok and r.code == 0 else "red"
             self.write_log(f"[{tag}]· END code={r.code}{' ' + r.error if r.error else ''}[/{tag}]")
+            self.last_cmd_result = (r.ok, r.code, list(r.lines))
         except Exception as e:  # noqa: BLE001
             self.write_log(f"[red]error:[/red] {e}")
 

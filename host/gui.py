@@ -21,11 +21,13 @@ from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QLabel, QLineEdit, QPushButton,
     QComboBox, QTextEdit, QPlainTextEdit, QTabWidget, QFileDialog, QSpinBox,
     QHBoxLayout, QVBoxLayout, QFormLayout, QGroupBox, QSplitter,
+    QListWidget, QStackedWidget, QScrollArea, QMessageBox, QFrame,
 )
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from companion_proto import Companion  # noqa: E402
+import companion_commands as cc  # noqa: E402
 
 DL_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "downloads")
 
@@ -237,15 +239,98 @@ class MainWindow(QMainWindow):
 
         # right: tabs
         self.tabs = QTabWidget()
+        self.tabs.addTab(self._tab_functions(), "Functions")
         self.tabs.addTab(self._tab_console(), "Console")
         self.tabs.addTab(self._tab_files(), "Files")
         self.tabs.addTab(self._tab_stream(), "Stream")
         self.tabs.addTab(self._tab_analyze(), "Analyze")
         split.addWidget(self.tabs)
-        split.setSizes([320, 680])
+        split.setSizes([300, 700])
 
         self.statusBar().showMessage("ready")
         self._set_enabled(False)
+
+    def _tab_functions(self):
+        """Every firmware function as a button (with arg fields), driven by the
+        shared companion_commands catalog. Left = group list, right = command
+        panel for the selected group, bottom = shared output."""
+        w = QWidget(); v = QVBoxLayout(w)
+        split = QSplitter(Qt.Horizontal)
+        self.fn_groups = QListWidget()
+        self.fn_groups.setMaximumWidth(190)
+        self.fn_stack = QStackedWidget()
+        for name, cmds in cc.all_groups():
+            self.fn_groups.addItem(name)
+            self.fn_stack.addWidget(self._group_panel(cmds))
+        self.fn_groups.currentRowChanged.connect(self.fn_stack.setCurrentIndex)
+        self.fn_groups.setCurrentRow(0)
+        split.addWidget(self.fn_groups)
+        split.addWidget(self.fn_stack)
+        split.setSizes([190, 560])
+        v.addWidget(split, 1)
+        self.txt_fn_out = QPlainTextEdit(readOnly=True)
+        self.txt_fn_out.setFont(_mono())
+        self.txt_fn_out.setMaximumHeight(150)
+        v.addWidget(self.txt_fn_out)
+        return w
+
+    def _group_panel(self, cmds):
+        area = QScrollArea(); area.setWidgetResizable(True)
+        inner = QWidget(); col = QVBoxLayout(inner)
+        for cmd in cmds:
+            col.addWidget(self._cmd_row(cmd))
+        col.addStretch(1)
+        area.setWidget(inner)
+        return area
+
+    def _cmd_row(self, cmd):
+        frame = QFrame(); frame.setFrameShape(QFrame.StyledPanel)
+        row = QHBoxLayout(frame); row.setContentsMargins(6, 3, 6, 3)
+        btn = QPushButton(cmd.label)
+        btn.setMinimumWidth(150)
+        if cmd.kind == "danger":
+            btn.setStyleSheet("QPushButton{color:#c0392b;font-weight:bold;}")
+        tip = cmd.desc + (f"  [{cmd.kind}]" if cmd.kind != "oneshot" else "")
+        if tip.strip():
+            btn.setToolTip(tip); frame.setToolTip(tip)
+        row.addWidget(btn)
+        inputs = []
+        for arg in cmd.args:
+            if arg.choices:
+                cb = QComboBox(); cb.setEditable(True)
+                cb.addItems(list(arg.choices))
+                if arg.default:
+                    cb.setCurrentText(arg.default)
+                cb.setMinimumWidth(80)
+                inputs.append(("combo", cb)); row.addWidget(cb)
+            else:
+                ed = QLineEdit(arg.default)
+                ed.setPlaceholderText(arg.name + ("" if arg.required else " (opt)"))
+                inputs.append(("edit", ed)); row.addWidget(ed, 1)
+        if not cmd.args:
+            row.addStretch(1)
+        btn.clicked.connect(lambda _=False, c=cmd, w=inputs: self._run_catalog(c, w))
+        return frame
+
+    def _run_catalog(self, cmd, inputs):
+        if not self._connected:
+            self._fn_log("[not connected]"); return
+        vals = [(w.currentText() if kind == "combo" else w.text()) for kind, w in inputs]
+        try:
+            line = cc.build_command(cmd, vals)
+        except ValueError as e:
+            self._fn_log(f"[{e}]"); self.statusBar().showMessage(str(e), 4000); return
+        if cmd.kind == "danger":
+            r = QMessageBox.question(self, "Confirm", f"Run:\n\n  {line}\n\n{cmd.desc}",
+                                     QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+            if r != QMessageBox.Yes:
+                return
+        self._fn_log(f"> {line}")
+        self._log(f"<b>&gt; {_esc(line)}</b>")
+        self.sig_request.emit(line, float(cmd.timeout))
+
+    def _fn_log(self, text):
+        self.txt_fn_out.appendPlainText(text)
 
     def _tab_console(self):
         w = QWidget(); v = QVBoxLayout(w)
@@ -426,6 +511,10 @@ class MainWindow(QMainWindow):
         color = "#27ae60" if (code == 0 and not error) else "#c0392b"
         tail = (" " + error) if error else ""
         self._log("<span style='color:%s'>· END code=%d%s</span>" % (color, code, _esc(tail)))
+        # mirror into the Functions output box (so button results are visible there)
+        if hasattr(self, "txt_fn_out"):
+            body = "\n".join("  " + l for l in lines) if lines else "  (no output)"
+            self.txt_fn_out.appendPlainText(body + f"\n· END code={code}{tail}")
 
     @Slot(list, list)
     def _on_stream_done(self, start, events):
@@ -444,6 +533,8 @@ class MainWindow(QMainWindow):
             self.lbl_conn.setText("● disconnected")
             self.lbl_conn.setStyleSheet("color:#c0392b;")
         self._log("<span style='color:#c0392b'>%s</span>" % _esc(msg))
+        if hasattr(self, "txt_fn_out"):
+            self.txt_fn_out.appendPlainText(msg)
         self.statusBar().showMessage(msg, 6000)
 
     # ---------- helpers ----------
