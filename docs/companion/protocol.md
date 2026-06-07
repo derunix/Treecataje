@@ -132,19 +132,37 @@
 
 ### 4.3. Старт/стоп потоковой задачи
 
+Async EVT-поток, дренится неблокирующе в `companion::tick()` (serial-task). Глагол: `companion stream start <kind>` / `companion stream stop <id>`. Поддерживаемые `kind`: **`telemetry`**, **`wifi`**, **`nrf`** (неизвестный → `ERR 3`). Радио инициализируется при старте (nrf → `ERR 4` если чип не найден) и освобождается при stop/дисконнекте. `g_radioOwner=companion` на время потока.
+
+**telemetry** — витальные параметры устройства (1 Гц):
 ```
-→ REQ 12 companion stream start beacon
-← RSP 12 streaming=beacon id=12
-← EVT 12 pkt t=1234 bssid=aa:bb:.. rssi=-60
-← EVT 12 pkt t=1240 bssid=cc:dd:.. rssi=-58
+→ REQ 12 companion stream start telemetry
+← RSP 12 streaming=telemetry id=12 interval=1000
+← EVT 12 tick seq=0 ms=99490 heap=111556
+```
+
+**wifi** — async-скан (`WiFi.scanNetworks(true)`), один заголовок + строка на сеть за проход. SPI-безопасно (отдельный радиопериферал):
+```
+→ REQ 12 companion stream start wifi
+← RSP 12 streaming=wifi id=12 interval=1000
+← EVT 12 wifi seq=0 count=7 ms=12345
+← EVT 12 wifi net ch=6 rssi=-58 enc=wpa2 bssid=aa:bb:cc:dd:ee:ff ssid=MyNet
         ...
+```
+
+**nrf** — RPD-свип спектра 2.4 ГГц (80 каналов, неск. сэмплов/канал), активные каналы с числом попаданий:
+```
+← EVT 12 nrf seq=0 ms=12345 channels=80 active_n=3 peak_ch=37 peak=3 active=12:1,37:3,80:2
+```
+> ⚠️ На T-Embed NRF24 делит SPI-шину с дисплеем (общего SPI-мьютекса в прошивке нет) — во время `nrf`-потока держи экран устройства неактивным.
+
+```
 → REQ 13 companion stream stop 12
 ← RSP 13 stopped=12
 ← END 13 0
-← END 12 0
 ```
 
-`companion stream …` — **новый** глагол (см. [`command-catalog.md`](command-catalog.md)) с явными start/stop и под busy-флагом. Под капотом переиспользует существующие сканеры/снифферы прошивки.
+`companion stream …` под busy-флагом; переиспользует радио-стек прошивки (`WiFi`, `nrf_start`/`NRFradio`).
 
 ### 4.4. Передача файла захвата (device → host)
 

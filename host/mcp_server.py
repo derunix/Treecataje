@@ -259,8 +259,15 @@ def device_analyze(remote_path: str, chunk: int = 512, timeout: float = 120.0) -
 @mcp.tool()
 def device_stream(kind: str = "telemetry", duration: float = 5.0, max_events: int = 0) -> str:
     """Start an async stream on the device, collect EVT events for `duration`
-    seconds, then stop. kind "telemetry" = live device vitals (ms/heap).
-    Returns the collected events (radio kinds wifi/nrf plug into the same path).
+    seconds, then stop. Returns the collected events.
+
+    kinds:
+      telemetry  live device vitals (ms / free heap), 1 Hz
+      wifi       async WiFi scan — one "wifi seq=.. count=N" header + one
+                 "wifi net ch=.. rssi=.. enc=.. bssid=.. ssid=.." per network
+      nrf        NRF24 RPD spectrum sweep (2.4 GHz, 80 ch) — "nrf seq=.. active=
+                 ch:hits,.. peak_ch=.. peak=.." (keep the device screen idle:
+                 NRF24 shares the TFT SPI bus on T-Embed).
     """
     with _lock:
         try:

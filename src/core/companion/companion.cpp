@@ -4,10 +4,12 @@
 #include "core/sd_functions.h"
 #include <Esp.h>
 #include <FS.h>
+#include <WiFi.h>
 #include <esp_random.h>
 #include <globals.h>
 #include <mbedtls/base64.h>
 #include <mbedtls/sha256.h>
+#include <modules/NRF24/nrf_common.h>
 
 #ifndef BRUCE_VERSION
 #define BRUCE_VERSION "dev"
@@ -40,6 +42,7 @@ uint32_t g_streamLastMs = 0;
 uint32_t g_streamInterval = 1000;
 String g_streamKind = "";
 const char *g_radioOwner = "none"; // none | ui | companion
+bool g_nrfReady = false;           // NRF24 powered up for an nrf stream
 
 String buildCaps() {
     String c = "wifi,rf,ir,nrf,gpio,crypto,storage,status,gps,util,settings,power";
@@ -254,6 +257,113 @@ void doFilePutEnd(uint32_t id) {
     emit("END " + String(id) + " " + String(ok ? 0 : 4));
 }
 
+// ---- real radio stream kinds (wifi / nrf) -------------------------------------
+
+const char *wifiEncStr(int enc) {
+    switch (enc) {
+        case WIFI_AUTH_OPEN: return "open";
+        case WIFI_AUTH_WEP: return "wep";
+        case WIFI_AUTH_WPA_PSK: return "wpa";
+        case WIFI_AUTH_WPA2_PSK: return "wpa2";
+        case WIFI_AUTH_WPA_WPA2_PSK: return "wpa/wpa2";
+        case WIFI_AUTH_WPA2_ENTERPRISE: return "wpa2-ent";
+#ifdef WIFI_AUTH_WPA3_PSK
+        case WIFI_AUTH_WPA3_PSK: return "wpa3";
+        case WIFI_AUTH_WPA2_WPA3_PSK: return "wpa2/wpa3";
+#endif
+        default: return "?";
+    }
+}
+
+// WiFi stream uses the async scan API so the serial task never blocks: kick a
+// scan, poll scanComplete() each tick, emit one EVT per network when ready,
+// then idle until the interval elapses before re-scanning. SPI-safe (WiFi has
+// its own radio peripheral; no shared bus with the display).
+void tickWifi(uint32_t now) {
+    int16_t st = WiFi.scanComplete();
+    if (st == WIFI_SCAN_RUNNING) return;
+    if (st >= 0) {
+        emit("EVT " + String(g_streamId) + " wifi seq=" + String(g_streamSeq) + " count=" +
+             String(st) + " ms=" + String(now));
+        int n = st > 40 ? 40 : st; // cap frames per sweep
+        for (int i = 0; i < n; i++) {
+            String ssid = WiFi.SSID(i);
+            ssid.replace('\r', ' ');
+            ssid.replace('\n', ' '); // never break framing
+            emit("EVT " + String(g_streamId) + " wifi net ch=" + String(WiFi.channel(i)) + " rssi=" +
+                 String(WiFi.RSSI(i)) + " enc=" + String(wifiEncStr(WiFi.encryptionType(i))) +
+                 " bssid=" + WiFi.BSSIDstr(i) + " ssid=" + (ssid.length() ? ssid : String("<hidden>")));
+        }
+        WiFi.scanDelete();
+        g_streamSeq++;
+        g_streamLastMs = now; // hold off the next scan until the interval passes
+        return;
+    }
+    // st == WIFI_SCAN_FAILED (-2): idle -> (re)start a scan when due
+    if (g_streamLastMs == 0 || (now - g_streamLastMs) >= g_streamInterval) {
+        if (WiFi.getMode() == WIFI_MODE_NULL) WiFi.mode(WIFI_STA);
+        WiFi.scanNetworks(true); // async (non-blocking)
+        g_streamLastMs = now;
+    }
+}
+
+bool nrfStreamBegin() {
+    if (!nrf_start(NRF_MODE_SPI)) return false;
+    NRFradio.setAutoAck(false);
+    NRFradio.disableCRC();       // accept any carrier
+    NRFradio.setAddressWidth(2); // reverse-engineering tactic (see nrf_spectrum)
+    const uint8_t noise[][2] = {{0x55, 0x55}, {0xAA, 0xAA}, {0xA0, 0xAA},
+                                {0xAB, 0xAA}, {0xAC, 0xAA}, {0xAD, 0xAA}};
+    for (uint8_t i = 0; i < 6; ++i) NRFradio.openReadingPipe(i, noise[i]);
+    NRFradio.setDataRate(RF24_1MBPS);
+    g_nrfReady = true;
+    return true;
+}
+
+// One RPD spectrum sweep over the 2.4 GHz band (80 channels), a few samples per
+// channel. Fast (~tens of ms). NOTE: on T-Embed the NRF24 shares the TFT SPI
+// bus, so keep the device screen idle while streaming nrf (no SPI mutex exists).
+void emitNrfSweep(uint32_t now) {
+    const int CH = 80;
+    const int SAMPLES = 3;
+    String active;
+    int peakCh = -1, peakHits = 0, total = 0;
+    for (int c = 0; c < CH; c++) {
+        NRFradio.setChannel(c);
+        int hits = 0;
+        for (int s = 0; s < SAMPLES; s++) {
+            NRFradio.startListening();
+            delayMicroseconds(130);
+            NRFradio.stopListening();
+            if (NRFradio.testRPD()) hits++;
+        }
+        if (hits > 0) {
+            if (active.length()) active += ",";
+            active += String(c) + ":" + String(hits);
+            total++;
+            if (hits > peakHits) {
+                peakHits = hits;
+                peakCh = c;
+            }
+        }
+    }
+    emit("EVT " + String(g_streamId) + " nrf seq=" + String(g_streamSeq) + " ms=" + String(now) +
+         " channels=" + String(CH) + " active_n=" + String(total) + " peak_ch=" + String(peakCh) +
+         " peak=" + String(peakHits) + " active=" + (active.length() ? active : String("none")));
+}
+
+void streamTeardown() {
+    if (g_streamKind == "wifi") {
+        int16_t st = WiFi.scanComplete();
+        if (st >= 0) WiFi.scanDelete();
+    }
+    if (g_nrfReady) {
+        NRFradio.stopListening();
+        NRFradio.powerDown();
+        g_nrfReady = false;
+    }
+}
+
 } // namespace
 
 namespace companion {
@@ -267,6 +377,7 @@ bool looksLikeFrame(const String &line) {
 void resetAuth() {
     g_authed = false;
     g_haveNonce = false;
+    streamTeardown(); // release wifi/nrf radios if a stream was active
     g_streaming = false;
     g_radioOwner = "none";
 }
@@ -403,6 +514,19 @@ void handleLine(SerialCli &cli, const String &raw) {
             emit("ERR " + String(id) + " 2 stream already active id=" + String(g_streamId));
             return;
         }
+        if (kind != "telemetry" && kind != "wifi" && kind != "nrf") {
+            emit("ERR " + String(id) + " 3 unknown stream kind=" + kind);
+            return;
+        }
+        // Per-kind radio init (must succeed before we mark the stream active).
+        if (kind == "wifi") {
+            if (WiFi.getMode() == WIFI_MODE_NULL) WiFi.mode(WIFI_STA);
+        } else if (kind == "nrf") {
+            if (!nrfStreamBegin()) {
+                emit("ERR " + String(id) + " 4 nrf init failed (radio not found?)");
+                return;
+            }
+        }
         g_streaming = true;
         g_streamId = id;
         g_streamSeq = 0;
@@ -415,6 +539,7 @@ void handleLine(SerialCli &cli, const String &raw) {
         return;
     }
     if (payload.startsWith("companion stream stop")) {
+        streamTeardown();
         g_streaming = false;
         g_radioOwner = "none";
         emit("RSP " + String(id) + " stopped=" + String(g_streamId));
@@ -496,10 +621,19 @@ void handleLine(SerialCli &cli, const String &raw) {
 void tick() {
     if (!g_streaming) return;
     uint32_t now = millis();
+    // WiFi manages its own cadence (async scan): poll every tick.
+    if (g_streamKind == "wifi") {
+        tickWifi(now);
+        return;
+    }
     if (g_streamLastMs != 0 && (now - g_streamLastMs) < g_streamInterval) return;
     g_streamLastMs = now;
-    // v1 stream kind "telemetry": live device vitals. Radio kinds (wifi/nrf)
-    // can plug into this same EVT path later.
+    if (g_streamKind == "nrf") {
+        emitNrfSweep(now);
+        g_streamSeq++;
+        return;
+    }
+    // "telemetry": live device vitals (ms / free heap).
     emit("EVT " + String(g_streamId) + " tick seq=" + String(g_streamSeq) + " ms=" +
          String(now) + " heap=" + String((uint32_t)ESP.getFreeHeap()));
     g_streamSeq++;

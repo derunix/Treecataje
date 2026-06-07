@@ -84,16 +84,16 @@ top-level: `ls`(`dir`), `cat`(`type`) 🟡, `md5`, `crc32`, `rm`(`del`), `md`(`m
 | `companion stream start <kind>` | старт потоковой задачи, события `EVT … ` | 🟡/🔴 |
 | `companion stream stop <id>` | остановка потоковой задачи | 🟢 |
 
-### Допустимые `<kind>` для `companion stream start` (v1)
+### Допустимые `<kind>` для `companion stream start`
 
-| kind | под капотом | событие | транспорт |
+| kind | под капотом | событие | статус |
 |---|---|---|---|
-| `beacon` | WiFi beacon-сниффер | `EVT <id> ap …` | 🟡 (метаданные ок по BLE) |
-| `wifi` | WiFi packet sniffer | `EVT <id> pkt …` | 🔴 (по BLE — дросселировать/в файл) |
-| `rf` | CC1101 rx (sub-GHz) | `EVT <id> frame …` | 🔴 (live → USB; по BLE — в `.sub`) |
-| `nrf` | NRF24 scan/sniff | `EVT <id> pkt …` | 🟡/🔴 |
+| `telemetry` | ms / free heap, 1 Гц | `EVT <id> tick seq=.. ms=.. heap=..` | 🟢 реализовано |
+| `wifi` | async `WiFi.scanNetworks(true)` | `EVT <id> wifi seq=.. count=N` + `EVT <id> wifi net ch=.. rssi=.. enc=.. bssid=.. ssid=..` | 🟢 реализовано (SPI-safe) |
+| `nrf` | NRF24 RPD-свип (80 ch) | `EVT <id> nrf seq=.. channels=80 active_n=.. peak_ch=.. peak=.. active=ch:hits,..` | 🟢 реализовано (⚠️ общий SPI с дисплеем — держать экран idle) |
+| `rf` (план) | CC1101 rx (sub-GHz) | `EVT <id> frame …` | ⬜ TODO |
 
-Формат полей события и `companion busy` — в [`protocol.md`](protocol.md#4-примеры-обмена). Набор `<kind>` расширяется в поздних фазах; v1 целится в `beacon` + `rf`.
+Неизвестный kind → `ERR <id> 3`; nrf без чипа → `ERR <id> 4`. Формат полей и `companion busy` — в [`protocol.md`](protocol.md#43-старт-стоп-потоковой-задачи).
 
 ---
 
