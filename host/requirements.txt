@@ -3,3 +3,4 @@ pyserial>=3.5      # USB-CDC transport
 bleak>=0.22        # BLE GATT-central transport (BlueZ)
 mcp>=1.0           # MCP server (Claude control/read)
 textual>=0.50      # interactive TUI
+PySide6>=6.6       # desktop GUI (Qt)

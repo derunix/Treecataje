@@ -2,7 +2,7 @@
 
 Linux-side tooling for the Treecataje companion device mode. See `../docs/companion/` for the full spec.
 
-Current state: **Phase 1** (framed protocol over USB) + **MCP server**. BLE transport, TUI, GUI come later (see `../docs/companion/roadmap.md`).
+Current state: **Phases 0–5 done** — framed protocol over USB **and** BLE, file transfer, async streaming, host-compute analysis, **MCP server**, **TUI**, and **GUI**. Remaining: Phase 6 (token auth + larger BLE MTU), real wifi/nrf stream kinds. See `../docs/companion/roadmap.md`.
 
 ## Layout
 
@@ -16,8 +16,10 @@ Current state: **Phase 1** (framed protocol over USB) + **MCP server**. BLE tran
 | `phase2_ble_test.py` / `phase3_file_test.py` | BLE handshake test / file-transfer (get+put round-trip) test. |
 | `tui.py` | Interactive TUI (Textual): connect, status panel, smart console (`:get`/`:put`/`:status`/cmd). Run: `python tui.py --port /dev/ttyACM1`. |
 | `tui_test.py` | Headless TUI smoke test (Textual Pilot). |
+| `gui.py` | Desktop GUI (PySide6) over the same core: connection bar (usb/ble + token), device/status panels, tabs **Console / Files / Stream / Analyze**. All device I/O on one worker thread. Run: `python gui.py --port /dev/ttyACM0`. |
+| `gui_test.py` | Headless GUI smoke test (Qt `offscreen`) — drives the real worker/signal path against the device. `--no-device` for UI-only. |
 | `companion_compute.py` | Host-compute: analyze device captures (NRF24 scan, battery CSV, pcap, generic) with ASCII viz. `python companion_compute.py --pull /nrf_scan.log`. |
-| `requirements.txt` / `.venv/` | deps: `pyserial`, `bleak`, `mcp`, `textual`. |
+| `requirements.txt` / `.venv/` | deps: `pyserial`, `bleak`, `mcp`, `textual`, `PySide6`. |
 
 ## Quick use
 
@@ -34,7 +36,7 @@ python3 -c "from companion_proto import Companion; c=Companion('/dev/ttyACM1'); 
 
 ## Device port
 
-`/dev/ttyACM1` = the ESP32-S3 target (VID:PID `0x303a:0x1001`). `/dev/ttyACM0` is the uConsole's own MCU — leave it alone.
+The ESP32-S3 target is the port that answers `HELLO` (VID:PID `0x303a:0x1001`). It usually enumerates as `/dev/ttyACM1`, but the index can flip to `/dev/ttyACM0` after a replug/reboot, while the uConsole's own MCU takes the other index. If a tool gets silence, try the other port (or grep `dmesg` for the latest `ttyACM* USB ACM device`). Quick check: the target replies to `REQ 1 HELLO proto=1 token=`.
 
 ## MCP server
 
