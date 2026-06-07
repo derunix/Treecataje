@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Treecataje Companion (TUI)
+Comment=Terminal UI for the LilyGO T-Embed companion device
+Exec=lxterminal -t "Companion TUI" -e /home/derunix/.local/bin/companion-tui
+Icon=utilities-terminal
+Terminal=false
+Categories=Utility;
+Keywords=bruce;t-embed;companion;rf;wifi;nrf;terminal;

@@ -17,6 +17,7 @@ Current state: **Phases 0–5 done** — framed protocol over USB **and** BLE, f
 | `tui.py` | Interactive TUI (Textual): connect, status panel, smart console (`:get`/`:put`/`:status`/cmd). Run: `python tui.py --port /dev/ttyACM1`. |
 | `tui_test.py` | Headless TUI smoke test (Textual Pilot). |
 | `gui.py` | Desktop GUI (PySide6) over the same core: connection bar (usb/ble + token), device/status panels, tabs **Console / Files / Stream / Analyze**. All device I/O on one worker thread. Run: `python gui.py --port /dev/ttyACM0`. |
+| `launchers/` | App-menu launchers (`.desktop` + wrappers) for the GUI/TUI. `bash launchers/install.sh` adds **Treecataje Companion (GUI/TUI)** to the menu and `companion-gui`/`companion-tui` to `~/.local/bin` (auto-detect the serial port). |
 | `gui_test.py` | Headless GUI smoke test (Qt `offscreen`) — drives the real worker/signal path against the device. `--no-device` for UI-only. |
 | `companion_compute.py` | Host-compute: analyze device captures (NRF24 scan, battery CSV, pcap, generic) with ASCII viz. `python companion_compute.py --pull /nrf_scan.log`. |
 | `requirements.txt` / `.venv/` | deps: `pyserial`, `bleak`, `mcp`, `textual`, `PySide6`. |

@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Treecataje Companion (GUI)
+Comment=Control the LilyGO T-Embed companion device — console/files/stream/analyze
+Exec=/home/derunix/.local/bin/companion-gui
+Icon=network-wireless
+Terminal=false
+Categories=Utility;
+Keywords=bruce;t-embed;companion;rf;wifi;nrf;

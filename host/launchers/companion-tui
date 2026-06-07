@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+# Launch the Treecataje companion TUI (Textual) in a terminal.
+# Auto-detects the device serial port (it drifts between ttyACM0/ttyACM1).
+set -euo pipefail
+
+HOST="/home/derunix/code/Treecataje/host"
+PY="$HOST/.venv/bin/python"
+
+detect_port() {
+    local p
+    for p in /dev/ttyACM0 /dev/ttyACM1; do
+        [ -e "$p" ] || continue
+        if "$PY" - "$p" <<'PYEOF' 2>/dev/null
+import sys
+sys.path.insert(0, "/home/derunix/code/Treecataje/host")
+from companion_proto import Companion
+c = Companion(sys.argv[1])
+ok = c.hello("", timeout=1.5).get("ok")
+c.close()
+sys.exit(0 if ok else 1)
+PYEOF
+        then echo "$p"; return; fi
+    done
+    for p in /dev/ttyACM0 /dev/ttyACM1; do [ -e "$p" ] && { echo "$p"; return; }; done
+    echo /dev/ttyACM0
+}
+
+PORT="${COMPANION_PORT:-$(detect_port)}"
+cd "$HOST"
+exec "$PY" tui.py --port "$PORT" "$@"
