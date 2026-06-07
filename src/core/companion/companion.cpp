@@ -2,6 +2,7 @@
 #include "FramingSerialDevice.h"
 #include "core/serial_commands/cli.h"
 #include "core/sd_functions.h"
+#include <Esp.h>
 #include <FS.h>
 #include <globals.h>
 #include <mbedtls/base64.h>
@@ -22,6 +23,15 @@ namespace {
 
 FramingSerialDevice g_framing(nullptr);
 bool g_authed = false;
+
+// --- async streaming state (drained in companion::tick, serial-task context) ---
+bool g_streaming = false;
+uint32_t g_streamId = 0;
+uint32_t g_streamSeq = 0;
+uint32_t g_streamLastMs = 0;
+uint32_t g_streamInterval = 1000;
+String g_streamKind = "";
+const char *g_radioOwner = "none"; // none | ui | companion
 
 String buildCaps() {
     String c = "wifi,rf,ir,nrf,gpio,crypto,storage,status,gps,util,settings,power";
@@ -287,7 +297,35 @@ void handleLine(SerialCli &cli, const String &raw) {
         return;
     }
     if (payload == "companion busy") {
-        emit("RSP " + String(id) + " owner=none"); // busy-flag infra: Phase 3
+        emit("RSP " + String(id) + " owner=" + String(g_radioOwner) +
+             (g_streaming ? " stream=" + g_streamKind + " id=" + String(g_streamId) : ""));
+        emit("END " + String(id) + " 0");
+        return;
+    }
+    // --- streaming: start/stop async EVT (drained in tick()) ---
+    if (payload.startsWith("companion stream start")) {
+        String kind = payload.substring(String("companion stream start").length());
+        kind.trim();
+        if (kind.length() == 0) kind = "telemetry";
+        if (g_streaming) {
+            emit("ERR " + String(id) + " 2 stream already active id=" + String(g_streamId));
+            return;
+        }
+        g_streaming = true;
+        g_streamId = id;
+        g_streamSeq = 0;
+        g_streamKind = kind;
+        g_streamLastMs = 0; // emit first tick immediately
+        g_radioOwner = "companion";
+        emit("RSP " + String(id) + " streaming=" + kind + " id=" + String(id) +
+             " interval=" + String(g_streamInterval));
+        emit("END " + String(id) + " 0");
+        return;
+    }
+    if (payload.startsWith("companion stream stop")) {
+        g_streaming = false;
+        g_radioOwner = "none";
+        emit("RSP " + String(id) + " stopped=" + String(g_streamId));
         emit("END " + String(id) + " 0");
         return;
     }
@@ -361,6 +399,18 @@ void handleLine(SerialCli &cli, const String &raw) {
     bool okCmd = cli.parse(payload);
     serialDevice = prev;
     g_framing.endRequest(okCmd ? 0 : 1);
+}
+
+void tick() {
+    if (!g_streaming) return;
+    uint32_t now = millis();
+    if (g_streamLastMs != 0 && (now - g_streamLastMs) < g_streamInterval) return;
+    g_streamLastMs = now;
+    // v1 stream kind "telemetry": live device vitals. Radio kinds (wifi/nrf)
+    // can plug into this same EVT path later.
+    emit("EVT " + String(g_streamId) + " tick seq=" + String(g_streamSeq) + " ms=" +
+         String(now) + " heap=" + String((uint32_t)ESP.getFreeHeap()));
+    g_streamSeq++;
 }
 
 } // namespace companion

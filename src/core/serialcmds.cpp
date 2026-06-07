@@ -45,6 +45,9 @@ void handleSerialCommands(SerialCli &serialCli) {
             Serial.printf("[CLI] Result: %s\n", result ? "TRUE" : "FALSE");
         }
     }
+    // Drain any active companion stream (emits async EVT frames). Non-blocking.
+    if (bruceConfig.companionEnabled) companion::tick();
+
     if (!serialDevice->available()) return;
 
     String cmd_str = serialDevice->readStringUntil('\n');

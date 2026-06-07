@@ -145,6 +145,24 @@ class Companion:
         """Upload a file to the device. Returns dict(ok, sha256, lines)."""
         return file_put_via(self.request, local_path, remote_path, chunk, timeout)
 
+    # --- async streaming ---
+    def stream(self, kind="telemetry", duration=5.0, max_events=None):
+        """Start a stream, collect EVT frames for `duration`s, then stop.
+        Returns dict(start, events)."""
+        r = self.request(f"companion stream start {kind}", timeout=4.0)
+        if not r.ok:
+            raise RuntimeError(f"stream start failed: {r.error or r.lines}")
+        rid = r.id
+        events = []
+        deadline = time.time() + duration
+        for fr in self._read_frames(deadline):
+            if fr.type == "EVT" and fr.id == rid:
+                events.append(fr.payload)
+                if max_events and len(events) >= max_events:
+                    break
+        self.request(f"companion stream stop {rid}", timeout=4.0)
+        return {"start": r.lines, "events": events}
+
 
 # --- transport-agnostic file transfer; `request` is callable(cmd, timeout)->Response ---
 def file_get_via(request, remote_path, local_path=None, chunk=512, timeout=60):

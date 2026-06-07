@@ -131,3 +131,23 @@ class BleCompanion:
         if "caps" in info:
             info["caps"] = info["caps"].split(",")
         return info
+
+    async def stream(self, kind="telemetry", duration=5.0, max_events=None):
+        r = await self.request(f"companion stream start {kind}", timeout=4.0)
+        if not r.ok:
+            raise RuntimeError(f"stream start failed: {r.error or r.lines}")
+        rid = r.id
+        events = []
+        loop = asyncio.get_event_loop()
+        deadline = loop.time() + duration
+        while loop.time() < deadline:
+            try:
+                fr = await asyncio.wait_for(self._queue.get(), timeout=deadline - loop.time())
+            except asyncio.TimeoutError:
+                break
+            if fr.type == "EVT" and fr.id == rid:
+                events.append(fr.payload)
+                if max_events and len(events) >= max_events:
+                    break
+        await self.request(f"companion stream stop {rid}", timeout=4.0)
+        return {"start": r.lines, "events": events}

@@ -71,6 +71,9 @@ class BleSync:
     def file_put(self, local, remote, chunk=192, timeout=180):
         return self._fp(self.request, local, remote, chunk, timeout)
 
+    def stream(self, kind="telemetry", duration=5.0, max_events=None):
+        return self._run(self.ble.stream(kind, duration, max_events), timeout=duration + 20)
+
     def close(self):
         try:
             self._run(self.ble.close(), timeout=10)
@@ -247,6 +250,22 @@ def device_analyze(remote_path: str, chunk: int = 512, timeout: float = 120.0) -
             out = _dev.file_get(remote_path, None, chunk=chunk, timeout=timeout)
             import companion_compute
             return companion_compute.analyze(remote_path, out["data"])
+        except Exception as e:  # noqa: BLE001
+            return f"error: {e}"
+
+
+@mcp.tool()
+def device_stream(kind: str = "telemetry", duration: float = 5.0, max_events: int = 0) -> str:
+    """Start an async stream on the device, collect EVT events for `duration`
+    seconds, then stop. kind "telemetry" = live device vitals (ms/heap).
+    Returns the collected events (radio kinds wifi/nrf plug into the same path).
+    """
+    with _lock:
+        try:
+            _ensure()
+            out = _dev.stream(kind, duration=duration, max_events=(max_events or None))
+            evs = "\n".join(out["events"]) or "(no events)"
+            return f"start: {' '.join(out['start'])}\nevents ({len(out['events'])}):\n{evs}"
         except Exception as e:  # noqa: BLE001
             return f"error: {e}"
 

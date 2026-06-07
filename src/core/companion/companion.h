@@ -18,4 +18,8 @@ bool looksLikeFrame(const String &line);
 // Process exactly one companion frame line (one BLE write == one frame).
 void handleLine(SerialCli &cli, const String &raw);
 
+// Called every serial-task iteration: emits queued async EVT frames (streaming).
+// Non-blocking; no-op unless a stream is active.
+void tick();
+
 } // namespace companion
