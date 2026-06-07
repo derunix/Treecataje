@@ -42,6 +42,9 @@ Registered in `../.mcp.json` (project scope). Claude Code launches it over stdio
 
 Auth token: empty by default (open/lab). Set `COMPANION_TOKEN` in `.mcp.json` and on the device once token auth is enforced (see `../docs/companion/security.md`).
 
+**Transport over BLE:** `device_connect(transport="ble")`. The device must be advertising first — enable it over USB once:
+`device_connect(transport="usb")` → `device_run("companion ble on")` → `device_disconnect()`, then `device_connect(transport="ble")`. Over BLE use a small `chunk` (≤192) for `device_file_get/put` (notify size). `device_run("companion ble off")` (over BLE) returns the device to USB.
+
 ## Roadmap toward the chosen stack
 
 The chosen architecture is a **Rust core** (`companion_core`, via pyo3) consumed by Python TUI/GUI/MCP. Right now the core is the pure-Python `companion_proto` (fast to iterate, proves the protocol). The MCP server and future front-ends import the core through one seam, so swapping in the Rust core later is localized. Building the Rust core needs a Rust toolchain (not yet installed).

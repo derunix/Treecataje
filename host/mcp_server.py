@@ -31,23 +31,76 @@ DEFAULT_TOKEN = os.environ.get("COMPANION_TOKEN", "")
 
 mcp = FastMCP("treecataje-device")
 
+
+class BleSync:
+    """Synchronous facade over the async BLE client (companion_ble), driven on a
+    dedicated background asyncio loop. Same interface as Companion so the tools
+    are transport-agnostic. (BLE must be enabled on the device first via
+    'companion ble on' over USB.)"""
+
+    def __init__(self, name="Bruc", token=""):
+        import asyncio
+        from companion_ble import BleCompanion
+        from companion_proto import file_get_via, file_put_via
+        self._asyncio = asyncio
+        self._fg, self._fp = file_get_via, file_put_via
+        self._loop = asyncio.new_event_loop()
+        self._thr = threading.Thread(target=self._loop.run_forever, daemon=True)
+        self._thr.start()
+        self.name = name
+
+        async def _setup():
+            # Build the client INSIDE the loop so its asyncio.Queue binds here.
+            self.ble = BleCompanion(name=name)
+            await self.ble.connect()
+            return await self.ble.hello(token)
+        self.info = self._run(_setup(), timeout=40)
+
+    def _run(self, coro, timeout=130):
+        return self._asyncio.run_coroutine_threadsafe(coro, self._loop).result(timeout)
+
+    def hello(self, token="", timeout=6.0):
+        return self.info
+
+    def request(self, cmd, timeout=8.0):
+        return self._run(self.ble.request(cmd, timeout), timeout=timeout + 10)
+
+    def file_get(self, remote, local=None, chunk=192, timeout=180):
+        return self._fg(self.request, remote, local, chunk, timeout)
+
+    def file_put(self, local, remote, chunk=192, timeout=180):
+        return self._fp(self.request, local, remote, chunk, timeout)
+
+    def close(self):
+        try:
+            self._run(self.ble.close(), timeout=10)
+        finally:
+            self._loop.call_soon_threadsafe(self._loop.stop)
+
+
 _lock = threading.Lock()
-_dev: Companion | None = None
+_dev = None
 _info: dict = {}
 _port = DEFAULT_PORT
+_transport = "usb"
 
 
-def _ensure(port: str | None = None, token: str | None = None) -> dict:
+def _ensure(transport=None, port=None, name="Bruc", token=None) -> dict:
     """Connect (if needed) and run HELLO. Returns the HELLO info dict."""
-    global _dev, _info, _port
+    global _dev, _info, _port, _transport
     if port:
         _port = port
+    if transport:
+        _transport = transport
     tok = DEFAULT_TOKEN if token is None else token
     if _dev is None:
-        _dev = Companion(_port)
-        _info = _dev.hello(tok)
+        if _transport == "ble":
+            _dev = BleSync(name=name, token=tok)
+            _info = _dev.info
+        else:
+            _dev = Companion(_port)
+            _info = _dev.hello(tok)
         if not _info.get("ok"):
-            # keep the connection but surface the auth/handshake problem
             raise RuntimeError(f"HELLO failed: {_info.get('raw').error if _info.get('raw') else _info}")
     return _info
 
@@ -60,10 +113,14 @@ def _fmt(resp) -> str:
 
 
 @mcp.tool()
-def device_connect(port: str = DEFAULT_PORT, token: str = "") -> str:
-    """Open the transport to the device and perform the HELLO handshake.
+def device_connect(transport: str = "usb", port: str = DEFAULT_PORT,
+                   name: str = "Bruc", token: str = "") -> str:
+    """Open a transport to the device and perform the HELLO handshake.
 
-    port: serial device (default /dev/ttyACM1 = the ESP32-S3 target).
+    transport: "usb" (default, /dev/ttyACM1) or "ble".
+    For BLE, the device must already be advertising — enable it first over USB:
+      device_connect(transport="usb"); device_run("companion ble on"); device_disconnect()
+    then device_connect(transport="ble"). name = BLE advertised name (default Bruc).
     token: companion auth token (empty = open/lab mode).
     """
     global _dev, _info
@@ -72,11 +129,11 @@ def device_connect(port: str = DEFAULT_PORT, token: str = "") -> str:
             if _dev is not None:
                 _dev.close()
                 _dev = None
-            info = _ensure(port, token)
+            info = _ensure(transport=transport, port=port, name=name, token=token)
         except Exception as e:  # noqa: BLE001
             return f"connect failed: {e}"
     caps = ",".join(info.get("caps", []))
-    return (f"connected port={port} fw={info.get('fw')} board={info.get('board')} "
+    return (f"connected transport={transport} fw={info.get('fw')} board={info.get('board')} "
             f"mtu={info.get('mtu')} name={info.get('name')}\ncaps={caps}")
 
 
