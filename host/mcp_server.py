@@ -268,6 +268,11 @@ def device_stream(kind: str = "telemetry", duration: float = 5.0, max_events: in
       nrf        NRF24 RPD spectrum sweep (2.4 GHz, 80 ch) — "nrf seq=.. active=
                  ch:hits,.. peak_ch=.. peak=.." (keep the device screen idle:
                  NRF24 shares the TFT SPI bus on T-Embed).
+      rf         CC1101 sub-GHz RSSI sweep — "rf seq=.. f0=.. f1=.. peak_f=..
+                 rssi=v0,v1,..". Pass a band: kind="rf 433 435" (MHz). Keep the
+                 device screen idle (CC1101 shares the TFT SPI bus).
+    Optional: append "interval=<ms>" to the kind to change the emit cadence,
+    e.g. kind="telemetry interval=500".
     """
     with _lock:
         try:
@@ -275,6 +280,25 @@ def device_stream(kind: str = "telemetry", duration: float = 5.0, max_events: in
             out = _dev.stream(kind, duration=duration, max_events=(max_events or None))
             evs = "\n".join(out["events"]) or "(no events)"
             return f"start: {' '.join(out['start'])}\nevents ({len(out['events'])}):\n{evs}"
+        except Exception as e:  # noqa: BLE001
+            return f"error: {e}"
+
+
+@mcp.tool()
+def device_stream_analyze(kind: str = "wifi", duration: float = 6.0) -> str:
+    """Run a radio stream and return a host-computed, human-readable analysis
+    instead of raw events. Best for wifi/nrf/rf:
+      wifi -> deduped AP table (RSSI/ch/enc/ssid) + channel histogram
+      nrf  -> per-channel 2.4 GHz activity histogram
+      rf   -> sub-GHz spectrum (ASCII) + strongest bins; pass kind="rf 433 435"
+    For telemetry it just echoes the events. duration in seconds.
+    """
+    with _lock:
+        try:
+            _ensure()
+            out = _dev.stream(kind, duration=duration)
+            import companion_compute
+            return companion_compute.analyze_stream(kind, out["events"])
         except Exception as e:  # noqa: BLE001
             return f"error: {e}"
 

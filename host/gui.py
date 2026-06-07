@@ -370,17 +370,31 @@ class MainWindow(QMainWindow):
     def _tab_stream(self):
         w = QWidget(); v = QVBoxLayout(w)
         row = QHBoxLayout()
-        self.cbo_kind = QComboBox(); self.cbo_kind.addItems(["telemetry", "wifi", "nrf"])
+        self.cbo_kind = QComboBox(); self.cbo_kind.addItems(["telemetry", "wifi", "nrf", "rf"])
+        self.cbo_kind.currentTextChanged.connect(self._stream_kind_changed)
         self.spn_dur = QSpinBox(); self.spn_dur.setRange(1, 120); self.spn_dur.setValue(5)
         self.spn_dur.setSuffix(" s")
         self.btn_stream = QPushButton("Start stream")
+        self.btn_stream_an = QPushButton("Analyze last")
         row.addWidget(QLabel("kind")); row.addWidget(self.cbo_kind)
-        row.addWidget(QLabel("duration")); row.addWidget(self.spn_dur)
-        row.addWidget(self.btn_stream); row.addStretch(1)
+        row.addWidget(QLabel("dur")); row.addWidget(self.spn_dur)
+        # rf band (MHz), shown only for kind=rf
+        self.lbl_rf = QLabel("band MHz")
+        self.ed_rf0 = QLineEdit("433.0"); self.ed_rf0.setMaximumWidth(70)
+        self.ed_rf1 = QLineEdit("434.8"); self.ed_rf1.setMaximumWidth(70)
+        for x in (self.lbl_rf, self.ed_rf0, self.ed_rf1):
+            row.addWidget(x); x.setVisible(False)
+        row.addWidget(self.btn_stream); row.addWidget(self.btn_stream_an); row.addStretch(1)
         v.addLayout(row)
         self.txt_stream = QPlainTextEdit(readOnly=True); self.txt_stream.setFont(_mono())
         v.addWidget(self.txt_stream, 1)
+        self._last_stream = ("", [])  # (kind, events) for "Analyze last"
         return w
+
+    def _stream_kind_changed(self, kind):
+        rf = (kind == "rf")
+        for x in (self.lbl_rf, self.ed_rf0, self.ed_rf1):
+            x.setVisible(rf)
 
     def _tab_analyze(self):
         w = QWidget(); v = QVBoxLayout(w)
@@ -428,6 +442,7 @@ class MainWindow(QMainWindow):
         self.btn_browse.clicked.connect(self._browse)
         self.btn_put.clicked.connect(self._do_put)
         self.btn_stream.clicked.connect(self._do_stream)
+        self.btn_stream_an.clicked.connect(self._analyze_last_stream)
         self.btn_analyze.clicked.connect(
             lambda: self.sig_analyze.emit(self.ed_an_remote.text().strip()))
 
@@ -475,7 +490,25 @@ class MainWindow(QMainWindow):
     def _do_stream(self):
         self.txt_stream.clear()
         self.btn_stream.setEnabled(False)
-        self.sig_stream.emit(self.cbo_kind.currentText(), float(self.spn_dur.value()))
+        kind = self.cbo_kind.currentText()
+        if kind == "rf":
+            a = self.ed_rf0.text().strip() or "433.0"
+            b = self.ed_rf1.text().strip() or "434.8"
+            kind = f"rf {a} {b}"
+        self._stream_kind_base = self.cbo_kind.currentText()
+        self.sig_stream.emit(kind, float(self.spn_dur.value()))
+
+    def _analyze_last_stream(self):
+        kind, events = self._last_stream
+        if not events:
+            self.txt_stream.appendPlainText("\n(no stream to analyze — run one first)")
+            return
+        try:
+            import companion_compute
+            rep = companion_compute.analyze_stream(kind, events)
+        except Exception as e:  # noqa: BLE001
+            rep = f"analyze error: {e}"
+        self.txt_stream.appendPlainText("\n──── analysis ────\n" + rep)
 
     # ---------- worker callbacks ----------
     @Slot(dict)
@@ -524,6 +557,10 @@ class MainWindow(QMainWindow):
         for e in events:
             self.txt_stream.appendPlainText("EVT " + e)
         self.txt_stream.appendPlainText("— %d event(s) —" % len(events))
+        self._last_stream = (getattr(self, "_stream_kind_base", "telemetry"), list(events))
+        # auto-analyze radio streams for an instant readable summary
+        if self._last_stream[0] in ("wifi", "nrf", "rf") and events:
+            self._analyze_last_stream()
 
     @Slot(str)
     def _on_error(self, msg):
@@ -542,6 +579,8 @@ class MainWindow(QMainWindow):
         for wdg in (self.ed_cmd, self.btn_send, self.btn_refresh, self.btn_get,
                     self.btn_put, self.btn_browse, self.btn_stream, self.btn_analyze):
             wdg.setEnabled(on)
+        # "Analyze last" works offline on already-collected events
+        self.btn_stream_an.setEnabled(True)
 
     def _log(self, html):
         self.txt_log.append(html)

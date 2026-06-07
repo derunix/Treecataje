@@ -1,7 +1,9 @@
 #include "companion.h"
 #include "FramingSerialDevice.h"
+#include "core/display.h"
 #include "core/serial_commands/cli.h"
 #include "core/sd_functions.h"
+#include <ELECHOUSE_CC1101_SRC_DRV.h>
 #include <Esp.h>
 #include <FS.h>
 #include <WiFi.h>
@@ -10,6 +12,7 @@
 #include <mbedtls/base64.h>
 #include <mbedtls/sha256.h>
 #include <modules/NRF24/nrf_common.h>
+#include <modules/rf/rf_utils.h>
 
 #ifndef BRUCE_VERSION
 #define BRUCE_VERSION "dev"
@@ -43,6 +46,8 @@ uint32_t g_streamInterval = 1000;
 String g_streamKind = "";
 const char *g_radioOwner = "none"; // none | ui | companion
 bool g_nrfReady = false;           // NRF24 powered up for an nrf stream
+bool g_rfReady = false;            // CC1101 powered up for an rf stream
+float g_rfStart = 433.0f, g_rfStop = 434.8f; // sub-GHz sweep band (MHz)
 
 String buildCaps() {
     String c = "wifi,rf,ir,nrf,gpio,crypto,storage,status,gps,util,settings,power";
@@ -352,6 +357,52 @@ void emitNrfSweep(uint32_t now) {
          " peak=" + String(peakHits) + " active=" + (active.length() ? active : String("none")));
 }
 
+bool rfStreamBegin(float start, float stop) {
+    // Validate against the CC1101 bands; fall back to the 433 ISM band.
+    auto ok = [](float f) {
+        return (f >= 280 && f <= 350) || (f >= 387 && f <= 468) || (f >= 779 && f <= 928);
+    };
+    if (!ok(start) || !ok(stop) || stop <= start) {
+        start = 433.0f;
+        stop = 434.8f;
+    }
+    g_rfStart = start;
+    g_rfStop = stop;
+    if (!initRfModule("rx", start)) return false;
+    ELECHOUSE_cc1101.setRxBW(200); // narrow RxBW for cleaner RSSI (matches rf_waterfall)
+    g_rfReady = true;
+    return true;
+}
+
+// One sub-GHz RSSI sweep across [g_rfStart, g_rfStop] (40 bins). Mirrors the
+// rf_waterfall arbitration (dummy TFT pixel) for the shared SPI bus. Keep the
+// device screen idle while streaming rf.
+void emitRfSweep(uint32_t now) {
+    const int N = 40;
+    float step = (g_rfStop - g_rfStart) / (float)(N - 1);
+    String rssis;
+    int peak = -200, peakIdx = 0, floor_ = 200;
+    for (int i = 0; i < N; i++) {
+        float f = g_rfStart + step * i;
+        setMHZ(f);
+        ELECHOUSE_cc1101.SetRx();            // re-strobe RX so the synth recalibrates
+                                             // at the new freq and RSSI becomes valid
+        tft.drawPixel(0, 0, 0);              // SPI arbitration on the shared bus
+        vTaskDelay(2 / portTICK_PERIOD_MS);  // yield + let RSSI settle (avoids 0x80)
+        int r = ELECHOUSE_cc1101.getRssi();
+        tft.drawPixel(0, 0, 0);              // re-sync after the status read
+        if (i) rssis += ",";
+        rssis += String(r);
+        if (r > peak) { peak = r; peakIdx = i; }
+        if (r < floor_) floor_ = r;
+    }
+    float peakF = g_rfStart + step * peakIdx;
+    emit("EVT " + String(g_streamId) + " rf seq=" + String(g_streamSeq) + " ms=" + String(now) +
+         " f0=" + String(g_rfStart, 2) + " f1=" + String(g_rfStop, 2) + " step=" + String(step, 3) +
+         " n=" + String(N) + " peak_f=" + String(peakF, 2) + " peak=" + String(peak) +
+         " floor=" + String(floor_) + " rssi=" + rssis);
+}
+
 void streamTeardown() {
     if (g_streamKind == "wifi") {
         int16_t st = WiFi.scanComplete();
@@ -361,6 +412,10 @@ void streamTeardown() {
         NRFradio.stopListening();
         NRFradio.powerDown();
         g_nrfReady = false;
+    }
+    if (g_rfReady) {
+        deinitRfModule();
+        g_rfReady = false;
     }
 }
 
@@ -507,16 +562,35 @@ void handleLine(SerialCli &cli, const String &raw) {
     }
     // --- streaming: start/stop async EVT (drained in tick()) ---
     if (payload.startsWith("companion stream start")) {
-        String kind = payload.substring(String("companion stream start").length());
-        kind.trim();
-        if (kind.length() == 0) kind = "telemetry";
+        String spec = payload.substring(String("companion stream start").length());
+        spec.trim();
+        if (spec.length() == 0) spec = "telemetry";
         if (g_streaming) {
             emit("ERR " + String(id) + " 2 stream already active id=" + String(g_streamId));
             return;
         }
-        if (kind != "telemetry" && kind != "wifi" && kind != "nrf") {
+        // base kind = first token; the rest carries optional args (rf range,
+        // interval=<ms>).
+        String kind = spec;
+        String rest = "";
+        int sp = spec.indexOf(' ');
+        if (sp > 0) {
+            kind = spec.substring(0, sp);
+            rest = spec.substring(sp + 1);
+            rest.trim();
+        }
+        if (kind != "telemetry" && kind != "wifi" && kind != "nrf" && kind != "rf") {
             emit("ERR " + String(id) + " 3 unknown stream kind=" + kind);
             return;
+        }
+        // optional interval override (interval=<ms>), else default 1 Hz
+        g_streamInterval = 1000;
+        String iv = fieldValue(spec, "interval");
+        if (iv.length()) {
+            long v = iv.toInt();
+            if (v < 200) v = 200;
+            if (v > 10000) v = 10000;
+            g_streamInterval = (uint32_t)v;
         }
         // Per-kind radio init (must succeed before we mark the stream active).
         if (kind == "wifi") {
@@ -524,6 +598,17 @@ void handleLine(SerialCli &cli, const String &raw) {
         } else if (kind == "nrf") {
             if (!nrfStreamBegin()) {
                 emit("ERR " + String(id) + " 4 nrf init failed (radio not found?)");
+                return;
+            }
+        } else if (kind == "rf") {
+            float a = g_rfStart, b = g_rfStop;
+            int s2 = rest.indexOf(' ');
+            if (s2 > 0) {  // "rf <start> <stop>"
+                a = rest.substring(0, s2).toFloat();
+                b = rest.substring(s2 + 1).toFloat();
+            }
+            if (!rfStreamBegin(a, b)) {
+                emit("ERR " + String(id) + " 4 rf init failed (CC1101 not found?)");
                 return;
             }
         }
@@ -534,7 +619,8 @@ void handleLine(SerialCli &cli, const String &raw) {
         g_streamLastMs = 0; // emit first tick immediately
         g_radioOwner = "companion";
         emit("RSP " + String(id) + " streaming=" + kind + " id=" + String(id) +
-             " interval=" + String(g_streamInterval));
+             " interval=" + String(g_streamInterval) +
+             (kind == "rf" ? " band=" + String(g_rfStart, 2) + "-" + String(g_rfStop, 2) : ""));
         emit("END " + String(id) + " 0");
         return;
     }
@@ -630,6 +716,11 @@ void tick() {
     g_streamLastMs = now;
     if (g_streamKind == "nrf") {
         emitNrfSweep(now);
+        g_streamSeq++;
+        return;
+    }
+    if (g_streamKind == "rf") {
+        emitRfSweep(now);
         g_streamSeq++;
         return;
     }

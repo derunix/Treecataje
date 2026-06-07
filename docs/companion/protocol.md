@@ -156,6 +156,14 @@ Async EVT-поток, дренится неблокирующе в `companion::t
 ```
 > ⚠️ На T-Embed NRF24 делит SPI-шину с дисплеем (общего SPI-мьютекса в прошивке нет) — во время `nrf`-потока держи экран устройства неактивным.
 
+**rf** — CC1101 RSSI-свип sub-GHz (40 бинов по диапазону, по умолчанию 433.0–434.8 МГц; диапазон задаётся `companion stream start rf 433 435`):
+```
+← EVT 12 rf seq=0 ms=12345 f0=433.00 f1=434.80 step=0.046 n=40 peak_f=433.92 peak=-41 floor=-96 rssi=-95,-93,...
+```
+> ⚠️ CC1101 тоже делит SPI с дисплеем — держи экран idle во время `rf`-потока.
+
+Любой kind принимает `interval=<ms>` (200–10000) для смены частоты выдачи, напр. `companion stream start telemetry interval=500`.
+
 ```
 → REQ 13 companion stream stop 12
 ← RSP 13 stopped=12

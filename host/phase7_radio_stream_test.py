@@ -52,6 +52,26 @@ def main():
     seqs = [int(e.split("seq=")[1].split()[0]) for e in nevs]
     ok &= check("nrf seq increasing", seqs == sorted(seqs) and len(set(seqs)) == len(seqs), str(seqs))
 
+    print(f"\n== rf (sub-GHz) stream ({args.nrf_seconds}s) ==")
+    rf = c.stream("rf 433 435", duration=args.nrf_seconds)
+    for e in rf["events"][:6]:
+        print("   EVT", e)
+    revs = [e for e in rf["events"] if e.startswith("rf seq=")]
+    ok &= check("got >=2 rf sweeps", len(revs) >= 2, f"{len(revs)} sweeps")
+    ok &= check("rf sweeps carry f0/peak_f/rssi",
+                all(("f0=" in e and "peak_f=" in e and "rssi=" in e) for e in revs))
+    if revs:
+        nbins = len(revs[0].split("rssi=")[1].split(","))
+        ok &= check("rf sweep has 40 bins", nbins == 40, f"{nbins} bins")
+
+    # host-compute analyzers on the real collected events
+    import companion_compute as comp
+    print("\n== analyzers ==")
+    for kind, evs in (("wifi", w["events"]), ("nrf", n["events"]), ("rf 433 435", rf["events"])):
+        rep = comp.analyze_stream(kind, evs)
+        print(f"--- {kind} ---\n{rep}")
+        ok &= check(f"analyzer({kind.split()[0]}) produced report", len(rep) > 20)
+
     busy = c.request("companion busy")
     ok &= check("busy=none after streams", any("owner=none" in l for l in busy.lines),
                 " ".join(busy.lines))

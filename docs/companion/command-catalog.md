@@ -91,7 +91,9 @@ top-level: `ls`(`dir`), `cat`(`type`) 🟡, `md5`, `crc32`, `rm`(`del`), `md`(`m
 | `telemetry` | ms / free heap, 1 Гц | `EVT <id> tick seq=.. ms=.. heap=..` | 🟢 реализовано |
 | `wifi` | async `WiFi.scanNetworks(true)` | `EVT <id> wifi seq=.. count=N` + `EVT <id> wifi net ch=.. rssi=.. enc=.. bssid=.. ssid=..` | 🟢 реализовано (SPI-safe) |
 | `nrf` | NRF24 RPD-свип (80 ch) | `EVT <id> nrf seq=.. channels=80 active_n=.. peak_ch=.. peak=.. active=ch:hits,..` | 🟢 реализовано (⚠️ общий SPI с дисплеем — держать экран idle) |
-| `rf` (план) | CC1101 rx (sub-GHz) | `EVT <id> frame …` | ⬜ TODO |
+| `rf [start stop]` | CC1101 RSSI-свип sub-GHz (40 бинов, по умолч. 433.0–434.8) | `EVT <id> rf seq=.. f0=.. f1=.. step=.. n=40 peak_f=.. peak=.. floor=.. rssi=v0,v1,..` | 🟢 реализовано (⚠️ общий SPI с дисплеем — держать экран idle) |
+
+Доп.: `interval=<ms>` в аргументах меняет частоту выдачи (200–10000), напр. `companion stream start telemetry interval=500`.
 
 Неизвестный kind → `ERR <id> 3`; nrf без чипа → `ERR <id> 4`. Формат полей и `companion busy` — в [`protocol.md`](protocol.md#43-старт-стоп-потоковой-задачи).
 

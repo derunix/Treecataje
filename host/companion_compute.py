@@ -160,6 +160,134 @@ def report_pcap(a):
     ])
 
 
+# ---------------- live stream analyzers (EVT payload lists) ----------------
+def analyze_wifi_stream(events):
+    nets, sweeps = {}, 0
+    for e in events:
+        if e.startswith("wifi seq="):
+            sweeps += 1
+            continue
+        if not e.startswith("wifi net "):
+            continue
+        si = e.find(" ssid=")  # leading space avoids matching inside "bssid="
+        ssid = e[si + 6:].strip() if si >= 0 else ""
+        head = e[:si] if si >= 0 else e
+        d = dict(t.split("=", 1) for t in head.split() if "=" in t)
+        try:
+            rssi = int(d.get("rssi", "-100"))
+        except ValueError:
+            rssi = -100
+        bssid = d.get("bssid", ssid or "?")
+        cur = nets.get(bssid)
+        if cur is None or rssi > cur["rssi"]:
+            nets[bssid] = {"ssid": ssid or "<hidden>", "ch": d.get("ch", "?"),
+                           "enc": d.get("enc", "?"), "rssi": rssi, "bssid": bssid}
+    return {"sweeps": sweeps, "nets": sorted(nets.values(), key=lambda n: -n["rssi"])}
+
+
+def report_wifi_stream(a):
+    out = [f"WiFi stream: {len(a['nets'])} unique APs over {a['sweeps']} sweep(s)", ""]
+    out.append(f"  {'RSSI':>5}  {'CH':>3}  {'ENC':<9} SSID")
+    for n in a["nets"]:
+        bars = _bar(n["rssi"] + 100, 70, 16)  # -100..-30 -> bar
+        out.append(f"  {n['rssi']:>5}  {n['ch']:>3}  {n['enc']:<9} {n['ssid']}  [{n['bssid']}] {bars}")
+    chans = {}
+    for n in a["nets"]:
+        chans[n["ch"]] = chans.get(n["ch"], 0) + 1
+    if chans:
+        out += ["", "  channel usage:"]
+        mx = max(chans.values())
+        for ch in sorted(chans, key=lambda c: (len(c), c)):
+            out.append(f"   ch{ch:>3} {chans[ch]:>2} {_bar(chans[ch], mx, 30)}")
+    return "\n".join(out)
+
+
+def analyze_nrf_stream(events):
+    chan, sweeps = {}, 0
+    for e in events:
+        if not e.startswith("nrf seq="):
+            continue
+        sweeps += 1
+        m = re.search(r"active=([0-9:,]+)", e)
+        if m:
+            for pair in m.group(1).split(","):
+                if ":" in pair:
+                    c, h = pair.split(":")
+                    chan[int(c)] = chan.get(int(c), 0) + int(h)
+    return {"sweeps": sweeps, "chan": chan}
+
+
+def report_nrf_stream(a):
+    out = [f"NRF24 stream: {a['sweeps']} sweep(s), {len(a['chan'])} active channels", ""]
+    if not a["chan"]:
+        out.append("  (no RPD activity detected)")
+        return "\n".join(out)
+    mx = max(a["chan"].values())
+    for ch in sorted(a["chan"]):
+        mhz = 2400 + ch
+        out.append(f"  ch{ch:>3} ({mhz} MHz) {a['chan'][ch]:>4} {_bar(a['chan'][ch], mx)}")
+    return "\n".join(out)
+
+
+def analyze_rf_stream(events):
+    acc, n = None, 0
+    f0 = f1 = step = None
+    peak = (-200, None)
+    sweeps = 0
+    for e in events:
+        if not e.startswith("rf seq="):
+            continue
+        sweeps += 1
+        d = dict(t.split("=", 1) for t in e.split() if "=" in t and not t.startswith("rssi="))
+        try:
+            f0, f1, step = float(d["f0"]), float(d["f1"]), float(d["step"])
+            pk = int(d.get("peak", "-200"))
+            if pk > peak[0]:
+                peak = (pk, float(d.get("peak_f", 0)))
+        except (KeyError, ValueError):
+            pass
+        m = re.search(r"rssi=([-\d,]+)", e)
+        vals = [int(x) for x in m.group(1).split(",")] if m else []
+        if acc is None and vals:
+            acc = [0.0] * len(vals)
+        if vals and acc and len(vals) == len(acc):
+            for i, v in enumerate(vals):
+                acc[i] += v
+            n += 1
+    avg = [v / n for v in acc] if (acc and n) else []
+    return {"sweeps": sweeps, "f0": f0, "f1": f1, "step": step, "avg": avg, "peak": peak}
+
+
+def report_rf_stream(a):
+    if not a["avg"]:
+        return f"RF stream: {a['sweeps']} sweep(s), no spectrum data"
+    out = [f"Sub-GHz spectrum: {a['f0']:.2f}-{a['f1']:.2f} MHz, {len(a['avg'])} bins, "
+           f"{a['sweeps']} sweep(s)"]
+    if a["peak"][1]:
+        out.append(f"  peak: {a['peak'][0]} dBm @ {a['peak'][1]:.2f} MHz")
+    out += ["", "  " + _sparkline(a["avg"], width=len(a["avg"]))]
+    # top 5 strongest bins
+    idx = sorted(range(len(a["avg"])), key=lambda i: -a["avg"][i])[:5]
+    out.append("  strongest bins:")
+    for i in sorted(idx):
+        f = a["f0"] + a["step"] * i
+        out.append(f"   {f:7.2f} MHz  {a['avg'][i]:6.1f} dBm  {_bar(int(a['avg'][i]) + 120, 90, 24)}")
+    return "\n".join(out)
+
+
+def analyze_stream(kind, events):
+    """Report on a collected list of EVT payloads from companion stream <kind>."""
+    base = (kind or "").split()[0] if kind else ""
+    if base == "wifi":
+        return report_wifi_stream(analyze_wifi_stream(events))
+    if base == "nrf":
+        return report_nrf_stream(analyze_nrf_stream(events))
+    if base == "rf":
+        return report_rf_stream(analyze_rf_stream(events))
+    body = "\n".join("  " + e for e in events[-30:]) or "  (no events)"
+    return f"{kind} stream: {len(events)} events\n{body}"
+
+
 # ---------------- dispatch ----------------
 def analyze(name, data: bytes):
     head = data[:64]
