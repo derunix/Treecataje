@@ -2,6 +2,7 @@
 #include "ble_api.hpp"
 #include <NimBLEDevice.h>
 #include <core/USBSerial/USBSerial.h>
+#include <core/companion/companion.h>
 #include <globals.h>
 
 BLE_API::BLE_API() = default;
@@ -13,6 +14,11 @@ class BLEAPICallback : public NimBLEServerCallbacks {
         pServer->updateConnParams(connInfo.getConnHandle(), 6, 24, 0, 400); // Improve latency
     };
 
+    void onDisconnect(NimBLEServer *pServer, NimBLEConnInfo &connInfo, int reason) override {
+        // Forget the companion auth session so the next central re-authenticates.
+        companion::resetAuth();
+    };
+
     void onMTUChange(uint16_t MTU, NimBLEConnInfo &connInfo) override { api->update_mtu(MTU); };
 
 public:
@@ -22,6 +28,7 @@ public:
 void BLE_API::setup() {
     NimBLEDevice::init("Bruce");
     NimBLEDevice::setPower(ESP_PWR_LVL_P9); // 9 dBm, tweak if you want
+    NimBLEDevice::setMTU(517);              // request a large ATT MTU for fast file xfer
 
     pServer = NimBLEDevice::createServer();
     pServer->advertiseOnDisconnect(true);

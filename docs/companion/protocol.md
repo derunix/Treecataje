@@ -41,25 +41,41 @@
 
 ---
 
-## 2. Рукопожатие и авторизация (`HELLO`)
+## 2. Рукопожатие и авторизация (`HELLO` + `AUTH`)
 
-Первый кадр сессии. Включает framed-режим и проводит авторизацию по общему секрету (см. [`security.md`](security.md)).
+Первый кадр сессии. Включает framed-режим и проводит авторизацию (challenge-response, см. [`security.md`](security.md)). `HELLO` **не несёт токен** — токен никогда не идёт по эфиру.
 
+**Open-режим** (токен на устройстве НЕ настроен; только по USB):
 ```
-→ REQ 1 HELLO proto=1 token=<secret>
-← RSP 1 fw=Treecataje/1.14 proto=1 board=T_EMBED_CC1101 mtu=247 name=Bruc
+→ REQ 1 HELLO proto=1
+← RSP 1 fw=Treecataje/dev proto=1 board=T_EMBED_CC1101 mtu=512 name=Bruc auth=open
 ← RSP 1 caps=wifi,rf,ir,nrf,gpio,crypto,storage,status,gps,util,settings,power,sound,screen,badusb,js
 ← END 1 0
 ```
 
-> `HELLO` всегда отвечает ровно двумя `RSP`-кадрами — (1) `fw/proto/board/mtu/name`, (2) `caps=…` — и затем `END <id> 0`. Хост парсит по префиксу поля, порядок строк фиксирован.
+**Challenge-response** (токен настроен; обязателен и по USB, и по BLE):
+```
+→ REQ 1 HELLO proto=1
+← RSP 1 fw=Treecataje/dev proto=1 board=T_EMBED_CC1101 mtu=512 name=Bruc auth=required
+← RSP 1 nonce=8f3a...   (16 байт случайных, hex; одноразовый)
+← END 1 0
+→ REQ 2 AUTH resp=<sha256("<token>:<nonceHex>")>
+← RSP 2 ok auth=ok
+← RSP 2 caps=...
+← END 2 0
+```
+Несовпадение → `← ERR 2 7 AUTH` (нужен новый `HELLO` — nonce одноразовый).
 
-- `proto=` — версия протокола, на которой говорит хост; прошивка отвечает своей.
-- `token=` — общий секрет; при несовпадении: `← ERR 1 7 AUTH` и framed-режим **не включается** (никакие другие команды не принимаются).
-- `caps=` — список включённых групп команд, выводится из тех же `#ifdef`, что гейтят регистрацию в `cli.cpp` (`USB_as_HID`→badusb, `LITE_VERSION`→js, `HAS_SCREEN`→screen, `HAS_NS4168_SPKR`/`BUZZ_PIN`→sound). Хост предлагает в UI только то, что реально есть на устройстве.
-- `mtu=` — согласованный ATT MTU (для расчёта размера чанков при передаче файлов).
+**BLE-замок:** если токен не настроен, а транспорт BLE → `HELLO` сразу `← ERR 1 7 AUTH token-required-for-ble`. По эфиру управлять радио без токена нельзя.
 
-После успешного `HELLO` сессия — framed; до него прошивка остаётся в legacy-режиме.
+- `auth=` — `open` (USB, без токена) или `required` (нужен `AUTH`-ответ на `nonce`).
+- `resp=` — `sha256("<token>:<nonceHex>")` строкой (та же `sha256Hex` в прошивке). Токен — общий секрет, по каналу идёт только хэш.
+- `caps=` — список включённых групп команд (из тех же `#ifdef`, что гейтят регистрацию в `cli.cpp`). Приходит в `HELLO` (open) либо в `AUTH`-ответе (challenge).
+- `mtu=` — согласованный ATT MTU (расчёт размера чанков). Прошивка запрашивает крупный MTU (`setMTU(517)`).
+
+Управление токеном (в уже аутентифицированной сессии): `companion token set <t>` / `companion token clear` / `companion token status`. Токен персистится в конфиге. Сессия сбрасывается при BLE-дисконнекте — следующий центральный аутентифицируется заново.
+
+После успешного рукопожатия сессия — framed; до него прошивка остаётся в legacy-режиме.
 
 ---
 

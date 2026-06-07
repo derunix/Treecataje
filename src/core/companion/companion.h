@@ -22,4 +22,8 @@ void handleLine(SerialCli &cli, const String &raw);
 // Non-blocking; no-op unless a stream is active.
 void tick();
 
+// Drop the authenticated session (call when a BLE central disconnects, so the
+// next connection must re-authenticate from scratch).
+void resetAuth();
+
 } // namespace companion

@@ -4,6 +4,7 @@
 #include "core/sd_functions.h"
 #include <Esp.h>
 #include <FS.h>
+#include <esp_random.h>
 #include <globals.h>
 #include <mbedtls/base64.h>
 #include <mbedtls/sha256.h>
@@ -23,6 +24,13 @@ namespace {
 
 FramingSerialDevice g_framing(nullptr);
 bool g_authed = false;
+
+// --- challenge-response auth state ---
+// When a token is configured, HELLO issues a random nonce; the host must answer
+// with AUTH resp=sha256(token ":" nonceHex). The token itself never crosses the
+// link (BLE is unencrypted). Nonce is one-shot. Auth is reset on BLE disconnect.
+uint8_t g_nonce[16];
+bool g_haveNonce = false;
 
 // --- async streaming state (drained in companion::tick, serial-task context) ---
 bool g_streaming = false;
@@ -74,6 +82,17 @@ String toHex(const uint8_t *d, size_t n) {
         s += h[d[i] & 0xf];
     }
     return s;
+}
+
+String sha256Hex(const String &in) {
+    uint8_t h[32];
+    mbedtls_sha256_context c;
+    mbedtls_sha256_init(&c);
+    mbedtls_sha256_starts(&c, 0);
+    mbedtls_sha256_update(&c, (const uint8_t *)in.c_str(), in.length());
+    mbedtls_sha256_finish(&c, h);
+    mbedtls_sha256_free(&c);
+    return toHex(h, 32);
 }
 
 // Path = text up to the first " size=" / " sha256=" / " chunk=" marker (so
@@ -243,6 +262,15 @@ bool looksLikeFrame(const String &line) {
     return line.startsWith("REQ ") || line.startsWith("ACK ");
 }
 
+// Drop the authenticated session (call on BLE disconnect so the next central
+// must re-authenticate; otherwise it would inherit the previous auth state).
+void resetAuth() {
+    g_authed = false;
+    g_haveNonce = false;
+    g_streaming = false;
+    g_radioOwner = "none";
+}
+
 void handleLine(SerialCli &cli, const String &raw) {
     String line = raw;
     line.trim();
@@ -268,25 +296,89 @@ void handleLine(SerialCli &cli, const String &raw) {
         return;
     }
 
-    // --- HELLO / authentication ---
+    // --- HELLO / authentication (challenge-response) ---
     if (payload.startsWith("HELLO")) {
-        String token = fieldValue(payload, "token");
-        bool ok = (bruceConfig.companionToken.length() == 0) ||
-                  (token == bruceConfig.companionToken);
-        if (!ok) {
-            emit("ERR " + String(id) + " 7 AUTH");
+        bool overBle = false;
+#if !defined(LITE_VERSION)
+        overBle = isBLEAPIEnabled();
+#endif
+        const String &tokenCfg = bruceConfig.companionToken;
+        String helloInfo = "fw=Treecataje/" + String(BRUCE_VERSION) +
+                           " proto=1 board=T_EMBED_CC1101 mtu=512 name=Bruc";
+
+        if (tokenCfg.length() == 0) {
+            // Open mode: only over the wired USB link. Over the air (BLE) a
+            // token MUST be configured first — this is the radio-control lock.
+            if (overBle) {
+                emit("ERR " + String(id) + " 7 AUTH token-required-for-ble");
+                return;
+            }
+            g_authed = true;
+            g_haveNonce = false;
+            emit("RSP " + String(id) + " " + helloInfo + " auth=open");
+            emit("RSP " + String(id) + " caps=" + buildCaps());
+            emit("END " + String(id) + " 0");
             return;
         }
-        g_authed = true;
-        emit("RSP " + String(id) + " fw=Treecataje/" + String(BRUCE_VERSION) +
-             " proto=1 board=T_EMBED_CC1101 mtu=512 name=Bruc");
-        emit("RSP " + String(id) + " caps=" + buildCaps());
+
+        // Token configured: issue a fresh one-shot challenge; the host must
+        // follow with AUTH resp=sha256(token ":" nonce). Not authed yet.
+        esp_fill_random(g_nonce, sizeof(g_nonce));
+        g_haveNonce = true;
+        g_authed = false;
+        emit("RSP " + String(id) + " " + helloInfo + " auth=required");
+        emit("RSP " + String(id) + " nonce=" + toHex(g_nonce, sizeof(g_nonce)));
         emit("END " + String(id) + " 0");
+        return;
+    }
+
+    // --- AUTH: answer to the HELLO challenge ---
+    if (payload.startsWith("AUTH")) {
+        if (!g_haveNonce) {
+            emit("ERR " + String(id) + " 7 AUTH no-challenge");
+            return;
+        }
+        String resp = fieldValue(payload, "resp");
+        String expect = sha256Hex(bruceConfig.companionToken + ":" + toHex(g_nonce, sizeof(g_nonce)));
+        g_haveNonce = false; // one-shot, even on failure (forces a new HELLO)
+        if (resp.length() && resp.equalsIgnoreCase(expect)) {
+            g_authed = true;
+            emit("RSP " + String(id) + " ok auth=ok");
+            emit("RSP " + String(id) + " caps=" + buildCaps());
+            emit("END " + String(id) + " 0");
+        } else {
+            g_authed = false;
+            emit("ERR " + String(id) + " 7 AUTH");
+        }
         return;
     }
 
     if (!g_authed) {
         emit("ERR " + String(id) + " 7 AUTH");
+        return;
+    }
+
+    // --- token management (only over an already-authed session) ---
+    if (payload.startsWith("companion token set ")) {
+        String t = payload.substring(20);
+        t.trim();
+        bruceConfig.companionToken = t;
+        bruceConfig.saveFile();
+        emit("RSP " + String(id) + " token=set len=" + String(t.length()));
+        emit("END " + String(id) + " 0");
+        return;
+    }
+    if (payload == "companion token clear") {
+        bruceConfig.companionToken = "";
+        bruceConfig.saveFile();
+        emit("RSP " + String(id) + " token=cleared");
+        emit("END " + String(id) + " 0");
+        return;
+    }
+    if (payload == "companion token status") {
+        emit("RSP " + String(id) + " token_set=" +
+             String(bruceConfig.companionToken.length() ? "true" : "false"));
+        emit("END " + String(id) + " 0");
         return;
     }
 

@@ -21,6 +21,25 @@ import serial  # pyserial
 KNOWN_TYPES = {"REQ", "RSP", "END", "ERR", "EVT", "ACK"}
 
 
+def auth_digest(token: str, nonce: str) -> str:
+    """Challenge-response proof: sha256("<token>:<nonceHex>"). Must match the
+    firmware (companion.cpp sha256Hex). The token never crosses the link."""
+    return hashlib.sha256(f"{token}:{nonce}".encode()).hexdigest()
+
+
+def _kv_from_resp(resp) -> dict:
+    """Collect all key=value tokens from a Response's RSP lines."""
+    info = {}
+    for line in resp.lines:
+        for tok in line.split():
+            if "=" in tok:
+                k, v = tok.split("=", 1)
+                info[k] = v
+    if "caps" in info:
+        info["caps"] = info["caps"].split(",")
+    return info
+
+
 @dataclass
 class Frame:
     type: str       # one of KNOWN_TYPES, or "RAW" for non-frame passthrough lines
@@ -125,16 +144,7 @@ class Companion:
         return resp
 
     def hello(self, token="", timeout=4.0) -> dict:
-        r = self.request(f"HELLO proto=1 token={token}", timeout=timeout)
-        info = {"ok": r.ok and r.code == 0, "raw": r}
-        for line in r.lines:
-            for tok in line.split():
-                if "=" in tok:
-                    k, v = tok.split("=", 1)
-                    info[k] = v
-        if "caps" in info:
-            info["caps"] = info["caps"].split(",")
-        return info
+        return hello_via(self.request, token, timeout)
 
     # --- file transfer (chunked base64 + sha256) ---
     def file_get(self, remote_path, local_path=None, chunk=512, timeout=60):
@@ -162,6 +172,37 @@ class Companion:
                     break
         self.request(f"companion stream stop {rid}", timeout=4.0)
         return {"start": r.lines, "events": events}
+
+
+# --- transport-agnostic HELLO + challenge-response auth ---
+def hello_via(request, token="", timeout=6.0) -> dict:
+    """HELLO handshake with challenge-response. `request` is callable(cmd, timeout).
+
+    Open mode (USB, no token configured) authenticates in one step. If the device
+    replies auth=required, we answer the nonce with AUTH resp=sha256(token:nonce).
+    Returns an info dict (fw/board/mtu/caps/...) with ok/raw[/error]."""
+    r = request("HELLO proto=1", timeout)
+    info = _kv_from_resp(r)
+    info["ok"] = r.ok and r.code == 0
+    info["raw"] = r
+    if not info["ok"]:
+        info["error"] = r.error
+        return info
+    if info.get("auth") == "required":
+        nonce = info.get("nonce")
+        if not nonce:
+            info["ok"] = False
+            info["error"] = "no nonce in challenge"
+            return info
+        r2 = request(f"AUTH resp={auth_digest(token, nonce)}", timeout)
+        info2 = _kv_from_resp(r2)
+        info["ok"] = r2.ok and r2.code == 0
+        info["raw"] = r2
+        if "caps" in info2:
+            info["caps"] = info2["caps"]
+        if not info["ok"]:
+            info["error"] = r2.error or "AUTH rejected"
+    return info
 
 
 # --- transport-agnostic file transfer; `request` is callable(cmd, timeout)->Response ---

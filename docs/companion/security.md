@@ -2,7 +2,16 @@
 
 **Контекст:** устройство несёт активные радиомодули (CC1101 sub-GHz TX, WiFi inject, NRF24, IR). Управляемость по BLE = управляемость **радио**. Сейчас в прошивке **нет ни pairing/bonding, ни авторизации** (проверено: в `ble_api.cpp`/`BLESerialService.cpp` нет `setSecurityAuth`/auth-callbacks). Значит включённый сегодня BLE-API командуется **любым в радиусе BLE**.
 
-Решение для v1 (зафиксировано): **токен в `HELLO`**. Полноценный bonding — Phase 6.
+Решение для v1 (зафиксировано): **токен в `HELLO`**. **Phase 6 РЕАЛИЗОВАН** (коммит на ветке `companion-mode`): challenge-response аутентификация, BLE без настроенного токена **запрещён**, сессия сбрасывается при BLE-дисконнекте, токен персистится в конфиге. Полноценный NimBLE bonding/шифрование канала — всё ещё впереди.
+
+## Что реализовано в Phase 6
+
+- **Challenge-response** (`companion.cpp`): `→ REQ n HELLO proto=1` → если токен настроен, `← RSP n ... auth=required` + `RSP n nonce=<16 байт hex>`. Хост отвечает `→ REQ m AUTH resp=sha256("<token>:<nonceHex>")`; устройство сверяет (`sha256Hex`). Совпало → `RSP m ok auth=ok` + caps; нет → `ERR m 7 AUTH`. **Токен никогда не идёт по эфиру** (только sha256 от nonce+token). Nonce одноразовый (`esp_fill_random`), при неудаче нужен новый HELLO.
+- **BLE-замок:** если токен НЕ настроен и транспорт BLE (`isBLEAPIEnabled()`), HELLO → `ERR 7 AUTH token-required-for-ble`. Open-режим (без токена) доступен **только по USB** (проводной dev). Это прямо закрывает «управление радио по BLE из эфира».
+- **Сброс сессии:** `BLEAPICallback::onDisconnect` → `companion::resetAuth()` (сбрасывает `g_authed`, nonce, активный стрим). Следующий BLE-центральный обязан аутентифицироваться заново.
+- **Персистентность:** `companionToken`/`companionEnabled` сохраняются в JSON-конфиг (`config.cpp` toJson/fromJson). Управление: `companion token set <t>` / `companion token clear` / `companion token status` (только в уже аутентифицированной сессии — настраивается по USB в open-режиме, далее обязателен и по USB, и по BLE).
+- **Throughput:** `NimBLEDevice::setMTU(517)` — запрос крупного ATT MTU для быстрой передачи файлов.
+- **Хост:** `companion_proto.hello_via` / `BleCompanion.hello` делают challenge-response единообразно; `auth_digest(token,nonce)`. MCP: `device_set_token`/`device_clear_token`/`device_token_status`. TUI: `--token`. GUI: поле token.
 
 ---
 
@@ -19,14 +28,11 @@
 
 ---
 
-## v1 — токен в `HELLO`
+## Остаётся доработать
 
-- Поле конфига `companionToken` (`BruceConfig`, см. [`firmware.md`](firmware.md#5-конфиг-флаг-и-токен)). Генерируется на устройстве (показывается в меню/QR, как `webUI`-креды) и вводится в хост-приложении один раз.
-- Рукопожатие: `→ REQ 1 HELLO proto=1 token=<secret>`. Несовпадение → `← ERR 1 7 AUTH`, framed-режим **не включается**, прочие команды не принимаются.
-- **Рекомендация по реализации, чтобы не светить токен в эфире открытым текстом:**
-  - challenge-response: `HELLO` без токена → устройство шлёт `nonce` → хост отвечает `HMAC(token, nonce)`. Так секрет не идёт по незашифрованному BLE plaintext'ом.
-  - (минимальный вариант v1 — plaintext-токен; приемлемо только в доверенной среде, отметить в UI).
-- Тайм-аут/лимит попыток: после N неверных `HELLO` — пауза/разрыв (анти-brute по BLE).
+- **Анти-brute:** сейчас нет лимита попыток AUTH. nonce одноразовый (после неудачи нужен новый HELLO), что усложняет онлайн-перебор, но явного rate-limit/паузы нет — добавить.
+- **Bonding/шифрование канала** (см. ниже) — challenge-response защищает от «командует любой», но канал по-прежнему не шифрован: пассивный сниффер видит трафик (но не может выдать валидный AUTH без токена).
+- **UI для токена на устройстве:** пока токен задаётся по USB (`companion token set`) — стоит добавить пункт меню/QR-показ, как у `webUI`-кредов.
 - При `companionEnabled=false` — framed-путь вообще не активен (поведение прошивки = текущее).
 
 ---

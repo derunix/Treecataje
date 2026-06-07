@@ -69,6 +69,9 @@ JsonDocument BruceConfig::toJson() const {
     setting["devMode"] = devMode;
     setting["colorInverted"] = colorInverted;
 
+    setting["companionEnabled"] = companionEnabled;
+    setting["companionToken"] = companionToken;
+
     setting["badUSBBLEKeyboardLayout"] = badUSBBLEKeyboardLayout;
     setting["badUSBBLEKeyDelay"] = badUSBBLEKeyDelay;
     setting["badUSBBLEShowOutput"] = badUSBBLEShowOutput;
@@ -390,6 +393,19 @@ void BruceConfig::fromFile(bool checkFS) {
     }
     if (!setting["colorInverted"].isNull()) {
         colorInverted = setting["colorInverted"].as<int>();
+    } else {
+        count++;
+        log_e("Fail");
+    }
+
+    if (!setting["companionEnabled"].isNull()) {
+        companionEnabled = setting["companionEnabled"].as<bool>();
+    } else {
+        count++;
+        log_e("Fail");
+    }
+    if (!setting["companionToken"].isNull()) {
+        companionToken = setting["companionToken"].as<String>();
     } else {
         count++;
         log_e("Fail");

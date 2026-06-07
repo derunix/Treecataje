@@ -15,7 +15,7 @@ import itertools
 
 from bleak import BleakClient, BleakScanner
 
-from companion_proto import Frame, Response
+from companion_proto import Frame, Response, auth_digest, _kv_from_resp
 
 SERVICE_UUID = "4371ec0b-3d43-49f9-b731-7c72a4a7bb91"
 CHAR_UUID = "d555ed97-bf2a-4f46-b3eb-d1fcdd7325e9"
@@ -121,15 +121,29 @@ class BleCompanion:
         return resp
 
     async def hello(self, token="", timeout=6.0) -> dict:
-        r = await self.request(f"HELLO proto=1 token={token}", timeout=timeout)
-        info = {"ok": r.ok and r.code == 0, "raw": r}
-        for line in r.lines:
-            for tok in line.split():
-                if "=" in tok:
-                    k, v = tok.split("=", 1)
-                    info[k] = v
-        if "caps" in info:
-            info["caps"] = info["caps"].split(",")
+        """HELLO + challenge-response over BLE (mirrors companion_proto.hello_via).
+        Over BLE a token is mandatory — the device refuses open mode on air."""
+        r = await self.request("HELLO proto=1", timeout=timeout)
+        info = _kv_from_resp(r)
+        info["ok"] = r.ok and r.code == 0
+        info["raw"] = r
+        if not info["ok"]:
+            info["error"] = r.error
+            return info
+        if info.get("auth") == "required":
+            nonce = info.get("nonce")
+            if not nonce:
+                info["ok"] = False
+                info["error"] = "no nonce in challenge"
+                return info
+            r2 = await self.request(f"AUTH resp={auth_digest(token, nonce)}", timeout=timeout)
+            info2 = _kv_from_resp(r2)
+            info["ok"] = r2.ok and r2.code == 0
+            info["raw"] = r2
+            if "caps" in info2:
+                info["caps"] = info2["caps"]
+            if not info["ok"]:
+                info["error"] = r2.error or "AUTH rejected"
         return info
 
     async def stream(self, kind="telemetry", duration=5.0, max_events=None):

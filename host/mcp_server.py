@@ -12,6 +12,8 @@ Tools:
   device_caps      capability list
   device_busy      radio owner / busy state
   device_run       run ANY firmware CLI command via REQ, return output + code
+  device_file_get/put/analyze/stream  files + capture analysis + EVT streaming
+  device_set_token/clear_token/token_status  manage the auth token (Phase 6)
   device_disconnect close the transport
 
 Env: COMPANION_PORT (default /dev/ttyACM1), COMPANION_TOKEN (default "").
@@ -266,6 +268,47 @@ def device_stream(kind: str = "telemetry", duration: float = 5.0, max_events: in
             out = _dev.stream(kind, duration=duration, max_events=(max_events or None))
             evs = "\n".join(out["events"]) or "(no events)"
             return f"start: {' '.join(out['start'])}\nevents ({len(out['events'])}):\n{evs}"
+        except Exception as e:  # noqa: BLE001
+            return f"error: {e}"
+
+
+@mcp.tool()
+def device_set_token(token: str) -> str:
+    """Set (or change) the device's companion auth token and persist it.
+
+    Requires an already-authenticated session (connect over USB in open mode
+    first if no token is set yet). Once set, the token is MANDATORY for BLE and
+    is enforced on USB too — keep it; reconnect with device_connect(token=...).
+    Pass an empty string is NOT how you clear it — use device_clear_token().
+    """
+    with _lock:
+        try:
+            _ensure()
+            r = _dev.request("companion token set " + token, timeout=8.0)
+            return _fmt(r)
+        except Exception as e:  # noqa: BLE001
+            return f"error: {e}"
+
+
+@mcp.tool()
+def device_clear_token() -> str:
+    """Clear the device's companion token (returns to open/USB-only mode).
+    Requires an authenticated session."""
+    with _lock:
+        try:
+            _ensure()
+            return _fmt(_dev.request("companion token clear", timeout=8.0))
+        except Exception as e:  # noqa: BLE001
+            return f"error: {e}"
+
+
+@mcp.tool()
+def device_token_status() -> str:
+    """Report whether a companion auth token is configured (does not reveal it)."""
+    with _lock:
+        try:
+            _ensure()
+            return _fmt(_dev.request("companion token status", timeout=8.0))
         except Exception as e:  # noqa: BLE001
             return f"error: {e}"
 

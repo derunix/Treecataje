@@ -42,9 +42,10 @@ class CompanionTUI(App):
         ("ctrl+l", "clear", "Clear log"),
     ]
 
-    def __init__(self, port: str):
+    def __init__(self, port: str, token: str = ""):
         super().__init__()
         self.port = port
+        self.token = token
         self.dev: Companion | None = None
         self._lock = asyncio.Lock()
         # last-rendered panel text (also handy for headless testing)
@@ -81,7 +82,7 @@ class CompanionTUI(App):
         try:
             async with self._lock:
                 self.dev = await asyncio.to_thread(Companion, self.port)
-                info = await asyncio.to_thread(self.dev.hello)
+                info = await asyncio.to_thread(self.dev.hello, self.token)
             if not info.get("ok"):
                 self.query_one("#devinfo", Static).update("[red]HELLO failed[/red]")
                 self.write_log("[red]HELLO failed[/red]")
@@ -161,8 +162,10 @@ class CompanionTUI(App):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", default="/dev/ttyACM1")
+    ap.add_argument("--token", default=os.environ.get("COMPANION_TOKEN", ""),
+                    help="companion auth token (required if the device has one set)")
     args = ap.parse_args()
-    CompanionTUI(args.port).run()
+    CompanionTUI(args.port, args.token).run()
 
 
 if __name__ == "__main__":
