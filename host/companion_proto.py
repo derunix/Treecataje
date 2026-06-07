@@ -10,6 +10,8 @@ TYPE in {REQ, RSP, END, ERR, EVT, ACK}.  A request collects RSP lines until a
 matching END (success) or ERR (failure).
 """
 import time
+import base64
+import hashlib
 import itertools
 from dataclasses import dataclass, field
 
@@ -133,3 +135,56 @@ class Companion:
         if "caps" in info:
             info["caps"] = info["caps"].split(",")
         return info
+
+    # --- file transfer (chunked base64 + sha256) ---
+    def file_get(self, remote_path, local_path=None, chunk=512, timeout=60):
+        """Download a file from the device. Returns dict(size, sha256, data[, path])."""
+        r = self.request(f"companion file get {remote_path} chunk={chunk}", timeout=timeout)
+        if not r.ok or r.code != 0:
+            raise RuntimeError(f"file get failed: {r.error or r.lines}")
+        sha_expected = None
+        for line in r.lines:
+            for tok in line.split():
+                if tok.startswith("sha256="):
+                    sha_expected = tok[len("sha256="):]
+        chunks = {}
+        for ev in r.events:
+            parts = ev.split(" ", 2)  # "chunk <n> <b64>"
+            if len(parts) == 3 and parts[0] == "chunk":
+                chunks[int(parts[1])] = parts[2]
+        data = b"".join(base64.b64decode(chunks[i]) for i in sorted(chunks))
+        got = hashlib.sha256(data).hexdigest()
+        if sha_expected and got.lower() != sha_expected.lower():
+            raise RuntimeError(f"sha256 mismatch: {got} != {sha_expected}")
+        out = {"size": len(data), "sha256": got, "data": data}
+        if local_path:
+            with open(local_path, "wb") as fh:
+                fh.write(data)
+            out["path"] = local_path
+        return out
+
+    def file_put(self, local_path, remote_path, chunk=512, timeout=60):
+        """Upload a file to the device. Returns dict(ok, sha256, written)."""
+        with open(local_path, "rb") as fh:
+            data = fh.read()
+        sha = hashlib.sha256(data).hexdigest()
+        r = self.request(
+            f"companion file put {remote_path} size={len(data)} sha256={sha} chunk={chunk}",
+            timeout=timeout,
+        )
+        if not r.ok or r.code != 0:
+            raise RuntimeError(f"put start failed: {r.error or r.lines}")
+        cs = chunk
+        for line in r.lines:
+            for tok in line.split():
+                if tok.startswith("chunk_size="):
+                    cs = int(tok[len("chunk_size="):])
+        n = 0
+        for i in range(0, len(data), cs):
+            b64 = base64.b64encode(data[i:i + cs]).decode()
+            rr = self.request(f"companion file putchunk {n} {b64}", timeout=timeout)
+            if not rr.ok or rr.code != 0:
+                raise RuntimeError(f"putchunk {n} failed: {rr.error or rr.code}")
+            n += 1
+        end = self.request("companion file putend", timeout=timeout)
+        return {"ok": end.ok and end.code == 0, "sha256": sha, "lines": end.lines}

@@ -144,6 +144,39 @@ def device_run(command: str, timeout: float = 6.0) -> str:
 
 
 @mcp.tool()
+def device_file_get(remote_path: str, local_path: str = "", chunk: int = 512, timeout: float = 60.0) -> str:
+    """Download a file from the device (SD/flash) to the host.
+
+    Chunked base64 transfer with sha256 verification. remote_path e.g. "/bruce.conf".
+    local_path: optional host path to save to (else just returns size+sha256).
+    Over BLE keep chunk small (MTU-limited); over USB 512 is fine.
+    """
+    with _lock:
+        try:
+            _ensure()
+            out = _dev.file_get(remote_path, local_path or None, chunk=chunk, timeout=timeout)
+            saved = f" saved={out['path']}" if "path" in out else ""
+            return f"ok size={out['size']} sha256={out['sha256']}{saved}"
+        except Exception as e:  # noqa: BLE001
+            return f"error: {e}"
+
+
+@mcp.tool()
+def device_file_put(local_path: str, remote_path: str, chunk: int = 512, timeout: float = 60.0) -> str:
+    """Upload a host file to the device (SD/flash).
+
+    Chunked base64 transfer with sha256 verification on the device side.
+    """
+    with _lock:
+        try:
+            _ensure()
+            out = _dev.file_put(local_path, remote_path, chunk=chunk, timeout=timeout)
+            return f"ok={out['ok']} sha256={out['sha256']} {' '.join(out['lines'])}"
+        except Exception as e:  # noqa: BLE001
+            return f"error: {e}"
+
+
+@mcp.tool()
 def device_disconnect() -> str:
     """Close the transport to the device."""
     global _dev
