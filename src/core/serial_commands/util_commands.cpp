@@ -211,11 +211,11 @@ uint32_t helpCallback(cmd *c) {
 
 void optionsList() {
     int i = 0;
-    Serial.println("\nActual Menu: " + menuOptionLabel);
-    Serial.println("Options available: ");
+    serialDevice->println("\nActual Menu: " + menuOptionLabel);
+    serialDevice->println("Options available: ");
     for (auto opt : options) {
         String txt = (opt.hovered ? ">" : " ") + String(i) + " - " + opt.label;
-        Serial.println(txt);
+        serialDevice->println(txt);
         i++;
     }
 }
@@ -238,28 +238,28 @@ uint32_t navCallback(cmd *c) {
 
     // Here send press response only to USB serial to avoid problems with BLE app
     if (nav == "next") {
-        Serial.println("Next Pressed");
+        serialDevice->println("Next Pressed");
         var = &NextPress;
     } else if (nav == "prev") {
-        Serial.println("Prev Pressed");
+        serialDevice->println("Prev Pressed");
         var = &PrevPress;
     } else if (nav == "esc") {
-        Serial.println("Esc Pressed");
+        serialDevice->println("Esc Pressed");
         var = &EscPress;
     } else if (nav == "up") {
-        Serial.println("Up Pressed");
+        serialDevice->println("Up Pressed");
         var = &UpPress;
     } else if (nav == "down") {
-        Serial.println("Down Pressed");
+        serialDevice->println("Down Pressed");
         var = &DownPress;
     } else if (nav == "select" || nav == "sel") {
-        Serial.println("Select Pressed");
+        serialDevice->println("Select Pressed");
         var = &SelPress;
     } else if (nav == "nextpage") {
-        Serial.println("Next Page Pressed");
+        serialDevice->println("Next Page Pressed");
         var = &NextPagePress;
     } else if (nav == "prevpage") {
-        Serial.println("Prev Page Pressed");
+        serialDevice->println("Prev Page Pressed");
         var = &PrevPagePress;
     } else {
         serialDevice->println(
@@ -280,7 +280,7 @@ uint32_t navCallback(cmd *c) {
         vTaskDelay(10 / portTICK_PERIOD_MS);
     }
     tmp = millis() - tmp;
-    Serial.printf("and Released after %lums", tmp);
+    serialDevice->printf("and Released after %lums", tmp);
     optionsList();
 
     return true;

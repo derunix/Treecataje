@@ -67,7 +67,7 @@ uint32_t webuiCallback(cmd *c) {
 uint32_t scanHostsCallback(cmd *c) {
     esp_netif_t *esp_netinterface = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
     if (esp_netinterface == nullptr) {
-        Serial.println("Failed to get netif handle\nTry connecting to a network first");
+        serialDevice->println("Failed to get netif handle\nTry connecting to a network first");
         return false;
     }
 
@@ -84,7 +84,7 @@ uint32_t snifferCallback(cmd *c) {
 
 uint32_t listenTCPCallback(cmd *c) {
     if (!wifiConnected) {
-        Serial.println("Connect to a WiFi first.");
+        serialDevice->println("Connect to a WiFi first.");
         return false;
     }
 
@@ -96,7 +96,7 @@ uint32_t listenTCPCallback(cmd *c) {
 /*
 uint32_t responderCallback(cmd *c) {
     if (!wifiConnected) {
-        Serial.println("Connect to a WiFi first.");
+        serialDevice->println("Connect to a WiFi first.");
         return false;
     }
 

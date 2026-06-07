@@ -11,10 +11,10 @@ static uint32_t nrfScanCallback(cmd *c) {
     uint32_t scanMs = timeArg.isSet() ? timeArg.getValue().toInt() : 3000;
 
     auto devices = nrf_sniffer_collect(scanMs, 25);
-    Serial.printf("[NRF] found %u devices\n", (unsigned)devices.size());
+    serialDevice->printf("[NRF] found %u devices\n", (unsigned)devices.size());
     for (size_t i = 0; i < devices.size(); ++i) {
         auto &d = devices[i];
-        Serial.printf(
+        serialDevice->printf(
             "%02u CH%3u %02X%02X%02X%02X%02X hits=%lu\n",
             (unsigned)(i + 1),
             d.channel,
@@ -43,7 +43,7 @@ static uint32_t nrfJamSweepCallback(cmd *c) {
     int dwell = a4.getValue().toInt();
     bool noise = a5.getValue().toInt() != 0;
 
-    Serial.printf(
+    serialDevice->printf(
         "[NRF] sweep jam start=%d stop=%d step=%d dwell=%d noise=%d\n", startCh, stopCh, step, dwell, noise
     );
     // Run sweep jam until user presses Esc on device; for serial we stop after one sweep

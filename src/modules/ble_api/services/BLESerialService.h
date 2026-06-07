@@ -4,7 +4,7 @@
 
 #include <SerialDevice.h>
 
-#define BUFFER_SIZE 128
+#define BUFFER_SIZE 256
 
 class BLESerialCallbacks;
 

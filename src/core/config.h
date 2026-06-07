@@ -101,6 +101,12 @@ public:
     uint16_t badUSBBLEKeyDelay = 10;
     bool badUSBBLEShowOutput = true;
 
+    // Companion mode (see docs/companion/). Frame-prefixed traffic ("REQ ...")
+    // is handled non-modally; plain CLI use is unaffected. Empty token => open
+    // auth (lab/USB). NOTE: not persisted yet (Phase 1 bring-up defaults).
+    bool companionEnabled = true;
+    String companionToken = "";
+
     std::vector<String> disabledMenus = {};
 
     std::vector<QrCodeEntry> qrCodes = {

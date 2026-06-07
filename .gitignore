@@ -18,3 +18,8 @@ mqjs_build
 docker-logs
 lib/mquickjs_headers/mqjs_stdlib_generator
 lib/mquickjs_headers/mqjs_stdlib_generator.exe
+
+# companion host tooling
+host/.venv/
+__pycache__/
+*.pyc

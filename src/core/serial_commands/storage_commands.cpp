@@ -22,18 +22,18 @@ uint32_t listCallback(cmd *c) {
         String fullPath = root.getNextFileName(&isDir);
         String nameOnly = fullPath.substring(fullPath.lastIndexOf("/") + 1);
         if (fullPath == "") { break; }
-        // Serial.printf("Path: %s (isDir: %d)\n", fullPath.c_str(), isDir);
+        // serialDevice->printf("Path: %s (isDir: %d)\n", fullPath.c_str(), isDir);
 
         serialDevice->print(nameOnly);
         if (esp_get_free_heap_size() > (String("Fo:" + nameOnly + ":0\n").length()) + 1024) {
             if (isDir) {
-                // Serial.printf("Directory: %s\n", fullPath.c_str());
+                // serialDevice->printf("Directory: %s\n", fullPath.c_str());
                 serialDevice->println("\t<DIR>");
             } else {
                 // For files, we need to get the size, so we open the file briefly
-                // Serial.printf("Opening file for size check: %s\n", fullPath.c_str());
+                // serialDevice->printf("Opening file for size check: %s\n", fullPath.c_str());
                 File file = fs->open(fullPath);
-                // Serial.printf("File size: %llu bytes\n", file.size());
+                // serialDevice->printf("File size: %llu bytes\n", file.size());
                 if (file) {
                     serialDevice->print("\t");
                     serialDevice->println(file.size());

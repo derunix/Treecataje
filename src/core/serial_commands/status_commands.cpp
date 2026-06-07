@@ -10,18 +10,18 @@ uint32_t statusCallback(cmd *c) {
 
     BatteryLogger::BatteryStatus battery = BatteryLogger::currentStatus();
 
-    Serial.println("System status:");
-    Serial.printf(
+    serialDevice->println("System status:");
+    serialDevice->printf(
         "CPU: %lu MHz, load: %u%%\n",
         static_cast<unsigned long>(SystemStatus::cpuFrequencyMhz()),
         static_cast<unsigned>(SystemStatus::cpuLoadPercent())
     );
-    Serial.printf("WiFi: %s\n", wifiConnected ? "connected" : "not connected");
-    Serial.printf("BLE: %s\n", BLEConnected ? "connected" : "not connected");
-    Serial.printf("SD card: %s\n", sdcardMounted ? "mounted" : "not mounted");
-    Serial.printf("Battery: %d%%", battery.percent);
-    if (battery.voltageValid) Serial.printf(" (%.3fV)", battery.voltage);
-    Serial.printf(", charging: %s\n", battery.charging ? "yes" : "no");
+    serialDevice->printf("WiFi: %s\n", wifiConnected ? "connected" : "not connected");
+    serialDevice->printf("BLE: %s\n", BLEConnected ? "connected" : "not connected");
+    serialDevice->printf("SD card: %s\n", sdcardMounted ? "mounted" : "not mounted");
+    serialDevice->printf("Battery: %d%%", battery.percent);
+    if (battery.voltageValid) serialDevice->printf(" (%.3fV)", battery.voltage);
+    serialDevice->printf(", charging: %s\n", battery.charging ? "yes" : "no");
 
     return true;
 }
@@ -36,7 +36,7 @@ uint32_t gpsMonCallback(cmd *c) {
         else if (arg == "off" || arg == "0" || arg == "false") enable = false;
     }
     gps_casic_enable_status_log(enable);
-    Serial.printf("gpsmon: logging %s\n", enable ? "ON" : "OFF");
+    serialDevice->printf("gpsmon: logging %s\n", enable ? "ON" : "OFF");
     return true;
 }
 

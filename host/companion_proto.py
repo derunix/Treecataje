@@ -1,0 +1,135 @@
+#!/usr/bin/env python3
+"""Companion wire-protocol v1 client (USB-CDC).
+
+Reference implementation of docs/companion/protocol.md, used to validate the
+Phase 1 firmware. Frame format (one frame per line, '\\n'-terminated):
+
+    <TYPE> <ID> <PAYLOAD...>
+
+TYPE in {REQ, RSP, END, ERR, EVT, ACK}.  A request collects RSP lines until a
+matching END (success) or ERR (failure).
+"""
+import time
+import itertools
+from dataclasses import dataclass, field
+
+import serial  # pyserial
+
+
+KNOWN_TYPES = {"REQ", "RSP", "END", "ERR", "EVT", "ACK"}
+
+
+@dataclass
+class Frame:
+    type: str       # one of KNOWN_TYPES, or "RAW" for non-frame passthrough lines
+    id: int
+    payload: str
+
+    @classmethod
+    def parse(cls, line: str):
+        line = line.rstrip("\r\n")
+        if not line:
+            return None
+        parts = line.split(" ", 2)
+        # A real frame is "<KNOWN> <int> [payload]". Anything else is RAW output
+        # (e.g. a command or deep module that still writes to bare Serial).
+        if len(parts) >= 2 and parts[0] in KNOWN_TYPES:
+            try:
+                fid = int(parts[1])
+                payload = parts[2] if len(parts) > 2 else ""
+                return cls(parts[0], fid, payload)
+            except ValueError:
+                pass
+        return cls("RAW", 0, line)
+
+
+@dataclass
+class Response:
+    id: int
+    ok: bool
+    code: int
+    lines: list = field(default_factory=list)   # RSP payloads
+    events: list = field(default_factory=list)   # EVT payloads seen during the request
+    error: str = ""
+
+
+class Companion:
+    def __init__(self, port="/dev/ttyACM1", baud=115200, debug=False):
+        self.ser = serial.Serial(port, baud, timeout=0.1)
+        self.debug = debug
+        self._ids = itertools.count(1)
+        self._rxbuf = bytearray()
+        time.sleep(0.4)
+        self.ser.reset_input_buffer()
+
+    def close(self):
+        self.ser.close()
+
+    # --- low level ---
+    def _read_frames(self, deadline):
+        """Yield Frames as they arrive until deadline."""
+        while time.time() < deadline:
+            chunk = self.ser.read(512)
+            if chunk:
+                self._rxbuf += chunk
+                while b"\n" in self._rxbuf:
+                    raw, _, self._rxbuf = self._rxbuf.partition(b"\n")
+                    line = raw.decode(errors="replace")
+                    if self.debug:
+                        print(f"  << {line!r}")
+                    fr = Frame.parse(line)
+                    if fr:
+                        yield fr
+            else:
+                time.sleep(0.01)
+
+    def request(self, cmd: str, timeout=4.0) -> Response:
+        rid = next(self._ids)
+        frame = f"REQ {rid} {cmd}\n"
+        if self.debug:
+            print(f"  >> {frame!r}")
+        self.ser.write(frame.encode())
+        self.ser.flush()
+        resp = Response(id=rid, ok=False, code=-1)
+        deadline = time.time() + timeout
+        for fr in self._read_frames(deadline):
+            if fr.type == "RAW":
+                # Unframed passthrough line (e.g. a command writing to bare
+                # Serial). Attribute it to the in-flight request.
+                resp.lines.append(fr.payload)
+                continue
+            if fr.id != rid and fr.type in ("RSP", "END", "ERR"):
+                continue  # not ours (legacy noise / other request)
+            if fr.type == "RSP":
+                resp.lines.append(fr.payload)
+            elif fr.type == "EVT":
+                resp.events.append(fr.payload)
+            elif fr.type == "END":
+                resp.ok = True
+                try:
+                    resp.code = int(fr.payload.strip().split()[0])
+                except (ValueError, IndexError):
+                    resp.code = 0
+                return resp
+            elif fr.type == "ERR":
+                resp.ok = False
+                resp.error = fr.payload
+                try:
+                    resp.code = int(fr.payload.strip().split()[0])
+                except (ValueError, IndexError):
+                    resp.code = -1
+                return resp
+        resp.error = "timeout"
+        return resp
+
+    def hello(self, token="", timeout=4.0) -> dict:
+        r = self.request(f"HELLO proto=1 token={token}", timeout=timeout)
+        info = {"ok": r.ok and r.code == 0, "raw": r}
+        for line in r.lines:
+            for tok in line.split():
+                if "=" in tok:
+                    k, v = tok.split("=", 1)
+                    info[k] = v
+        if "caps" in info:
+            info["caps"] = info["caps"].split(",")
+        return info

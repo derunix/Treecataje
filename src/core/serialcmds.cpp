@@ -1,4 +1,5 @@
 #include "serialcmds.h"
+#include "companion/companion.h"
 #include "freertos/queue.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
@@ -47,6 +48,14 @@ void handleSerialCommands(SerialCli &serialCli) {
     if (!serialDevice->available()) return;
 
     String cmd_str = serialDevice->readStringUntil('\n');
+
+    // Companion path: framed, non-modal. We deliberately do NOT call
+    // backToMenu() here, so the user's current screen is left untouched.
+    if (bruceConfig.companionEnabled && companion::looksLikeFrame(cmd_str)) {
+        companion::handleLine(serialCli, cmd_str);
+        return;
+    }
+
     Serial.println("COMMAND: " + cmd_str);
     serialCli.parse(cmd_str);
     serialDevice->print("# "); // prompt

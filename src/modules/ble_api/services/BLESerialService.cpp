@@ -57,11 +57,13 @@ size_t BLESerialService::println(size_t n) {
 }
 
 void BLESerialService::vprintf(const char *fmt, va_list args) {
-    int size = vsnprintf(NULL, 0, fmt, args) + 1;
+    // Was: sprintf(str, fmt, args) — passed va_list as a vararg (broken) and
+    // notified with the would-be length, not the truncated one. Fixed:
     char str[BUFFER_SIZE];
-    sprintf(str, fmt, args);
-
-    serial_char->notify(reinterpret_cast<const uint8_t *>(str), size);
+    int n = vsnprintf(str, sizeof(str), fmt, args);
+    if (n < 0) return;
+    size_t len = (n < (int)sizeof(str)) ? (size_t)n : sizeof(str) - 1;
+    serial_char->notify(reinterpret_cast<const uint8_t *>(str), len);
     vTaskDelay(pdMS_TO_TICKS(10));
 }
 

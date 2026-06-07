@@ -9,7 +9,14 @@ public:
     size_t println(const String &s) override { return out->println(s); }
     size_t print(const String &s) override { return out->print(s); }
     size_t print(const int n, int format) override { return out->print(n, format); }
-    void vprintf(const char *fmt, va_list args) override { out->printf(fmt, args); }
+    void vprintf(const char *fmt, va_list args) override {
+        // NOTE: do NOT call out->printf(fmt, args) — that passes the va_list as a
+        // single vararg (classic bug). Format into a buffer first.
+        char buf[256];
+        int n = vsnprintf(buf, sizeof(buf), fmt, args);
+        if (n < 0) return;
+        out->print(buf);
+    }
     size_t println() override { return out->println(); }
     size_t println(size_t n) override { return out->println(n); }
     size_t println(const uint32_t n) override { return out->println(n); }

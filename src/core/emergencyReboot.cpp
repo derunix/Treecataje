@@ -2,7 +2,7 @@
 
 #include "display.h"
 #include "powerSave.h"
-#include <ESP.h>
+#include <Esp.h> // NOTE: core header is Esp.h; <ESP.h> breaks on case-sensitive (Linux) FS
 #include <globals.h>
 #include <vector>
 

@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "treecataje-device": {
+      "command": "/home/derunix/code/Treecataje/host/.venv/bin/python",
+      "args": ["/home/derunix/code/Treecataje/host/mcp_server.py"],
+      "env": {
+        "COMPANION_PORT": "/dev/ttyACM1",
+        "COMPANION_TOKEN": ""
+      }
+    }
+  }
+}
