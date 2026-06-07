@@ -9,9 +9,9 @@ PY="$HOST/.venv/bin/python"
 # Pick the ttyACM that answers the companion HELLO; fall back to first present.
 detect_port() {
     local p
-    for p in /dev/ttyACM0 /dev/ttyACM1; do
+    for p in /dev/ttyACM0 /dev/ttyACM1 /dev/ttyACM2 /dev/ttyACM3; do
         [ -e "$p" ] || continue
-        if "$PY" - "$p" <<'PYEOF' 2>/dev/null
+        if timeout -s KILL 4 "$PY" - "$p" <<'PYEOF' 2>/dev/null
 import sys
 sys.path.insert(0, "/home/derunix/code/Treecataje/host")
 from companion_proto import Companion
@@ -22,10 +22,10 @@ sys.exit(0 if ok else 1)
 PYEOF
         then echo "$p"; return; fi
     done
-    for p in /dev/ttyACM0 /dev/ttyACM1; do [ -e "$p" ] && { echo "$p"; return; }; done
+    for p in /dev/ttyACM0 /dev/ttyACM1 /dev/ttyACM2 /dev/ttyACM3; do [ -e "$p" ] && { echo "$p"; return; }; done
     echo /dev/ttyACM0
 }
 
-PORT="${COMPANION_PORT:-$(detect_port)}"
+PORT="${COMPANION_PORT:-$(detect_port 2>/dev/null)}"
 cd "$HOST"
 exec "$PY" gui.py --port "$PORT" "$@"
