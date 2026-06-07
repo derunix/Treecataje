@@ -1,0 +1,5 @@
+# Companion host tooling deps (installed in host/.venv)
+pyserial>=3.5      # USB-CDC transport
+bleak>=0.22        # BLE GATT-central transport (BlueZ)
+mcp>=1.0           # MCP server (Claude control/read)
+textual>=0.50      # interactive TUI
