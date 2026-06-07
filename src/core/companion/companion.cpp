@@ -7,6 +7,13 @@
 #define BRUCE_VERSION "dev"
 #endif
 
+#if !defined(LITE_VERSION)
+// Defined in settings.cpp. Forward-declared here to avoid including the
+// widely-included settings.h (keeps incremental rebuilds small).
+void enableBLEAPI();
+bool isBLEAPIEnabled();
+#endif
+
 namespace {
 
 FramingSerialDevice g_framing(nullptr);
@@ -115,6 +122,39 @@ void handleLine(SerialCli &cli, const String &raw) {
         emit("END " + String(id) + " 0");
         return;
     }
+#if !defined(LITE_VERSION)
+    // Enable/disable the BLE API remotely. IMPORTANT: respond on the CURRENT
+    // transport BEFORE toggling, because enableBLEAPI() switches the global
+    // serialDevice (USB <-> BLE).
+    if (payload.startsWith("companion ble")) {
+        String arg = payload.substring(String("companion ble").length());
+        arg.trim();
+        bool on = isBLEAPIEnabled();
+        if (arg == "on") {
+            if (on) {
+                emit("RSP " + String(id) + " ble=on already name=Bruc");
+                emit("END " + String(id) + " 0");
+            } else {
+                emit("RSP " + String(id) + " ble=on name=Bruc");
+                emit("END " + String(id) + " 0");
+                enableBLEAPI(); // serialDevice -> BLE after we replied on USB
+            }
+        } else if (arg == "off") {
+            if (!on) {
+                emit("RSP " + String(id) + " ble=off already");
+                emit("END " + String(id) + " 0");
+            } else {
+                emit("RSP " + String(id) + " ble=off");
+                emit("END " + String(id) + " 0");
+                enableBLEAPI(); // serialDevice -> USB after we replied on BLE
+            }
+        } else { // status
+            emit("RSP " + String(id) + " ble=" + String(on ? "on" : "off"));
+            emit("END " + String(id) + " 0");
+        }
+        return;
+    }
+#endif
     if (payload.startsWith("companion ")) {
         emit("ERR " + String(id) + " 3 UNSUPPORTED"); // file/stream: Phase 3
         return;
