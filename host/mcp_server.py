@@ -177,6 +177,24 @@ def device_file_put(local_path: str, remote_path: str, chunk: int = 512, timeout
 
 
 @mcp.tool()
+def device_analyze(remote_path: str, chunk: int = 512, timeout: float = 120.0) -> str:
+    """Fetch a capture/log file from the device and analyze it on the host.
+
+    Host-compute augmentation: auto-detects NRF24 scan logs, battery CSV, pcap
+    captures, or falls back to a text/hex head. Returns a human-readable report
+    (with ASCII histograms/sparklines). e.g. remote_path "/nrf_scan.log".
+    """
+    with _lock:
+        try:
+            _ensure()
+            out = _dev.file_get(remote_path, None, chunk=chunk, timeout=timeout)
+            import companion_compute
+            return companion_compute.analyze(remote_path, out["data"])
+        except Exception as e:  # noqa: BLE001
+            return f"error: {e}"
+
+
+@mcp.tool()
 def device_disconnect() -> str:
     """Close the transport to the device."""
     global _dev

@@ -11,11 +11,12 @@ Current state: **Phase 1** (framed protocol over USB) + **MCP server**. BLE tran
 | `companion_proto.py` | Pure-Python client of the wire protocol (USB). Frame codec + request/response + HELLO. Robust to unframed (raw `Serial`) lines. |
 | `phase0_probe.py` | Phase 0 bring-up: talks to the legacy CLI (`# ` prompt) to confirm the command surface. No firmware deps. |
 | `phase1_test.py` | Phase 1 acceptance test: HELLO → caps, status round-trip with clean `END`, companion verbs. |
-| `mcp_server.py` | MCP server (stdio) exposing the device to Claude: `device_connect/info/status/caps/busy/run/file_get/file_put/disconnect`. |
+| `mcp_server.py` | MCP server (stdio) exposing the device to Claude: `device_connect/info/status/caps/busy/run/file_get/file_put/analyze/disconnect`. |
 | `companion_ble.py` | BLE GATT-central transport (bleak); same protocol as USB. |
 | `phase2_ble_test.py` / `phase3_file_test.py` | BLE handshake test / file-transfer (get+put round-trip) test. |
 | `tui.py` | Interactive TUI (Textual): connect, status panel, smart console (`:get`/`:put`/`:status`/cmd). Run: `python tui.py --port /dev/ttyACM1`. |
 | `tui_test.py` | Headless TUI smoke test (Textual Pilot). |
+| `companion_compute.py` | Host-compute: analyze device captures (NRF24 scan, battery CSV, pcap, generic) with ASCII viz. `python companion_compute.py --pull /nrf_scan.log`. |
 | `requirements.txt` / `.venv/` | deps: `pyserial`, `bleak`, `mcp`, `textual`. |
 
 ## Quick use
