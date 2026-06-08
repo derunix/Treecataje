@@ -275,6 +275,37 @@ def report_rf_stream(a):
     return "\n".join(out)
 
 
+def save_stream(kind, events, directory):
+    """Persist a collected stream to a timestamped text file (header + one EVT
+    payload per line). Returns the path. `directory` is created if needed."""
+    import os
+    import time
+    os.makedirs(directory, exist_ok=True)
+    base = (kind or "stream").split()[0]
+    path = os.path.join(directory, f"{base}-{time.strftime('%Y%m%d-%H%M%S')}.txt")
+    with open(path, "w") as fh:
+        fh.write(f"# kind: {kind}\n")
+        fh.write(f"# saved: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+        for e in events:
+            fh.write(e + "\n")
+    return path
+
+
+def analyze_stream_file(path):
+    """Read a capture saved by save_stream() and analyze it."""
+    kind, events = "telemetry", []
+    with open(path) as fh:
+        for line in fh:
+            line = line.rstrip("\n")
+            if line.startswith("# kind:"):
+                kind = line.split(":", 1)[1].strip()
+            elif line.startswith("#") or not line.strip():
+                continue
+            else:
+                events.append(line)
+    return analyze_stream(kind, events)
+
+
 def analyze_stream(kind, events):
     """Report on a collected list of EVT payloads from companion stream <kind>."""
     base = (kind or "").split()[0] if kind else ""
@@ -321,9 +352,12 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("target", nargs="?", help="local file to analyze")
     ap.add_argument("--pull", help="remote device path to fetch then analyze")
+    ap.add_argument("--stream", help="analyze a saved stream capture file (from save_stream)")
     ap.add_argument("--port", default="/dev/ttyACM1")
     args = ap.parse_args()
-    if args.pull:
+    if args.stream:
+        print(analyze_stream_file(args.stream))
+    elif args.pull:
         print(fetch_and_analyze(args.pull, args.port))
     elif args.target:
         with open(args.target, "rb") as fh:

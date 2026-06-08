@@ -21,7 +21,7 @@ from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QLabel, QLineEdit, QPushButton,
     QComboBox, QTextEdit, QPlainTextEdit, QTabWidget, QFileDialog, QSpinBox,
     QHBoxLayout, QVBoxLayout, QFormLayout, QGroupBox, QSplitter,
-    QListWidget, QStackedWidget, QScrollArea, QMessageBox, QFrame,
+    QListWidget, QStackedWidget, QScrollArea, QMessageBox, QFrame, QCheckBox,
 )
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -30,6 +30,31 @@ from companion_proto import Companion  # noqa: E402
 import companion_commands as cc  # noqa: E402
 
 DL_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "downloads")
+CAP_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "captures")
+
+
+class HistoryLineEdit(QLineEdit):
+    """A command input with Up/Down history recall."""
+    def __init__(self, *a, **k):
+        super().__init__(*a, **k)
+        self._hist = []
+        self._idx = 0
+
+    def remember(self, text):
+        if text and (not self._hist or self._hist[-1] != text):
+            self._hist.append(text)
+        self._idx = len(self._hist)
+
+    def keyPressEvent(self, e):
+        if e.key() == Qt.Key_Up and self._hist:
+            self._idx = max(0, self._idx - 1)
+            self.setText(self._hist[self._idx])
+            return
+        if e.key() == Qt.Key_Down and self._hist:
+            self._idx = min(len(self._hist), self._idx + 1)
+            self.setText(self._hist[self._idx] if self._idx < len(self._hist) else "")
+            return
+        super().keyPressEvent(e)
 
 
 class DeviceWorker(QObject):
@@ -255,9 +280,15 @@ class MainWindow(QMainWindow):
         self.txt_status = QPlainTextEdit(readOnly=True)
         self.txt_status.setFont(_mono())
         gsv.addWidget(self.txt_status)
+        rrow = QHBoxLayout()
         self.btn_refresh = QPushButton("Refresh status")
-        gsv.addWidget(self.btn_refresh)
+        self.chk_auto = QCheckBox("auto (2s)")
+        rrow.addWidget(self.btn_refresh); rrow.addWidget(self.chk_auto)
+        gsv.addLayout(rrow)
         lv.addWidget(gs, 1)
+        self._auto_timer = QTimer(self)
+        self._auto_timer.setInterval(2000)
+        self._auto_timer.timeout.connect(self._auto_tick)
         split.addWidget(left)
 
         # right: tabs
@@ -361,8 +392,8 @@ class MainWindow(QMainWindow):
         self.txt_log.setFont(_mono())
         v.addWidget(self.txt_log, 1)
         row = QHBoxLayout()
-        self.ed_cmd = QLineEdit()
-        self.ed_cmd.setPlaceholderText("device CLI command, e.g. free · ls / · wifi scan")
+        self.ed_cmd = HistoryLineEdit()
+        self.ed_cmd.setPlaceholderText("device CLI command (↑/↓ history) e.g. free · ls / · wifi scan")
         self.btn_send = QPushButton("Send")
         row.addWidget(self.ed_cmd, 1); row.addWidget(self.btn_send)
         v.addLayout(row)
@@ -499,12 +530,40 @@ class MainWindow(QMainWindow):
         self.ed_rf1 = QLineEdit("434.8"); self.ed_rf1.setMaximumWidth(70)
         for x in (self.lbl_rf, self.ed_rf0, self.ed_rf1):
             row.addWidget(x); x.setVisible(False)
-        row.addWidget(self.btn_stream); row.addWidget(self.btn_stream_an); row.addStretch(1)
+        self.btn_stream_save = QPushButton("Save")
+        self.btn_stream_load = QPushButton("Load…")
+        row.addWidget(self.btn_stream); row.addWidget(self.btn_stream_an)
+        row.addWidget(self.btn_stream_save); row.addWidget(self.btn_stream_load)
+        row.addStretch(1)
         v.addLayout(row)
         self.txt_stream = QPlainTextEdit(readOnly=True); self.txt_stream.setFont(_mono())
         v.addWidget(self.txt_stream, 1)
-        self._last_stream = ("", [])  # (kind, events) for "Analyze last"
+        self._last_stream = ("", [])  # (kind, events) for "Analyze last"/"Save"
         return w
+
+    def _save_stream(self):
+        kind, events = self._last_stream
+        if not events:
+            self.txt_stream.appendPlainText("\n(no stream to save — run one first)")
+            return
+        try:
+            import companion_compute
+            path = companion_compute.save_stream(kind, events, CAP_DIR)
+            self.txt_stream.appendPlainText(f"\nsaved {len(events)} events -> {path}")
+        except Exception as e:  # noqa: BLE001
+            self.txt_stream.appendPlainText(f"\nsave error: {e}")
+
+    def _load_stream(self):
+        os.makedirs(CAP_DIR, exist_ok=True)
+        path, _ = QFileDialog.getOpenFileName(self, "Load capture", CAP_DIR, "Captures (*.txt);;All (*)")
+        if not path:
+            return
+        try:
+            import companion_compute
+            rep = companion_compute.analyze_stream_file(path)
+        except Exception as e:  # noqa: BLE001
+            rep = f"load error: {e}"
+        self.txt_stream.appendPlainText(f"\n──── {os.path.basename(path)} ────\n" + rep)
 
     def _stream_kind_changed(self, kind):
         rf = (kind == "rf")
@@ -566,6 +625,19 @@ class MainWindow(QMainWindow):
         self.btn_fb_dl.clicked.connect(self._fb_dl_clicked)
         self.btn_fb_view.clicked.connect(self._fb_view_clicked)
         self.btn_fb_del.clicked.connect(self._fb_del_clicked)
+        self.btn_stream_save.clicked.connect(self._save_stream)
+        self.btn_stream_load.clicked.connect(self._load_stream)
+        self.chk_auto.toggled.connect(self._toggle_auto)
+
+    def _toggle_auto(self, on):
+        if on and self._connected:
+            self._auto_timer.start()
+        else:
+            self._auto_timer.stop()
+
+    def _auto_tick(self):
+        if self._connected:
+            self.sig_status.emit()
         self.btn_analyze.clicked.connect(
             lambda: self.sig_analyze.emit(self.ed_an_remote.text().strip()))
 
@@ -650,10 +722,13 @@ class MainWindow(QMainWindow):
         self._set_enabled(True)
         self.sig_status.emit()
         self._fb_refresh()  # populate the device file browser
+        if self.chk_auto.isChecked():
+            self._auto_timer.start()
 
     @Slot()
     def _on_disconnected(self):
         self._connected = False
+        self._auto_timer.stop()
         self.btn_connect.setText("Connect")
         self.btn_connect.setEnabled(True)
         self.lbl_conn.setText("● disconnected")

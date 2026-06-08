@@ -23,3 +23,5 @@ lib/mquickjs_headers/mqjs_stdlib_generator.exe
 host/.venv/
 __pycache__/
 *.pyc
+host/captures/
+host/downloads/
