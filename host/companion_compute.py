@@ -334,6 +334,29 @@ def recon_report(results, when=""):
     return "\n".join(out) + "\n"
 
 
+def analyze_telemetry_stream(events):
+    heaps, mss = [], []
+    for e in events:
+        if not e.startswith("tick"):
+            continue
+        d = dict(t.split("=", 1) for t in e.split() if "=" in t)
+        if d.get("heap", "").isdigit():
+            heaps.append(int(d["heap"]))
+        if d.get("ms", "").lstrip("-").isdigit():
+            mss.append(int(d["ms"]))
+    return {"ticks": len(heaps), "heaps": heaps, "span_ms": (mss[-1] - mss[0]) if len(mss) > 1 else 0}
+
+
+def report_telemetry_stream(a):
+    if not a["heaps"]:
+        return "telemetry: no ticks"
+    lo, hi = min(a["heaps"]), max(a["heaps"])
+    out = [f"Telemetry: {a['ticks']} ticks over {a['span_ms']/1000:.1f}s",
+           f"  free heap: now {a['heaps'][-1]} B, min {lo}, max {hi}, delta {a['heaps'][-1]-a['heaps'][0]:+d}",
+           "  " + _sparkline(a["heaps"], width=len(a["heaps"]))]
+    return "\n".join(out)
+
+
 def analyze_stream(kind, events):
     """Report on a collected list of EVT payloads from companion stream <kind>."""
     base = (kind or "").split()[0] if kind else ""
@@ -343,6 +366,8 @@ def analyze_stream(kind, events):
         return report_nrf_stream(analyze_nrf_stream(events))
     if base == "rf":
         return report_rf_stream(analyze_rf_stream(events))
+    if base == "telemetry":
+        return report_telemetry_stream(analyze_telemetry_stream(events))
     body = "\n".join("  " + e for e in events[-30:]) or "  (no events)"
     return f"{kind} stream: {len(events)} events\n{body}"
 

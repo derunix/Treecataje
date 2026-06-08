@@ -72,6 +72,7 @@ class DeviceWorker(QObject):
     report = Signal(str)         # analyze report text
     stream_done = Signal(list, list)        # start_lines, events
     listing = Signal(str, list)  # path, [(name, is_dir, size)]
+    heap = Signal(int)           # free heap bytes (live telemetry)
     error = Signal(str)
 
     def __init__(self):
@@ -136,6 +137,21 @@ class DeviceWorker(QObject):
             self.status.emit("\n".join(r.lines) if r.lines else "(no status)")
         except Exception as e:  # noqa: BLE001
             self.error.emit("status error: %s" % e)
+
+    @Slot()
+    def do_heap(self):
+        if self.dev is None:
+            return
+        try:
+            r = self.dev.request("free", timeout=6.0)
+            for ln in r.lines:
+                if "Free heap:" in ln:
+                    digits = "".join(ch for ch in ln.split("Free heap:")[1] if ch.isdigit())
+                    if digits:
+                        self.heap.emit(int(digits))
+                    return
+        except Exception:  # noqa: BLE001
+            pass
 
     @Slot(str)
     def do_list(self, path):
@@ -241,6 +257,7 @@ class MainWindow(QMainWindow):
     sig_stream = Signal(str, float)
     sig_list = Signal(str)
     sig_recon = Signal(float)
+    sig_heap = Signal()
 
     def __init__(self, port="/dev/ttyACM1"):
         super().__init__()
@@ -299,12 +316,16 @@ class MainWindow(QMainWindow):
         self.txt_status = QPlainTextEdit(readOnly=True)
         self.txt_status.setFont(_mono())
         gsv.addWidget(self.txt_status)
+        self.lbl_heap = QLabel(""); self.lbl_heap.setFont(_mono())
+        self.lbl_heap.setStyleSheet("color:#27ae60;")
+        gsv.addWidget(self.lbl_heap)
         rrow = QHBoxLayout()
         self.btn_refresh = QPushButton("Refresh status")
         self.chk_auto = QCheckBox("auto (2s)")
         rrow.addWidget(self.btn_refresh); rrow.addWidget(self.chk_auto)
         gsv.addLayout(rrow)
         lv.addWidget(gs, 1)
+        self._heap_hist = []
         self._auto_timer = QTimer(self)
         self._auto_timer.setInterval(2000)
         self._auto_timer.timeout.connect(self._auto_tick)
@@ -797,6 +818,7 @@ class MainWindow(QMainWindow):
         self.worker.report.connect(self.txt_report.setPlainText)
         self.worker.stream_done.connect(self._on_stream_done)
         self.worker.listing.connect(self._on_listing)
+        self.worker.heap.connect(self._on_heap)
         self.worker.error.connect(self._on_error)
 
         self.sig_connect.connect(self.worker.do_connect)
@@ -809,6 +831,7 @@ class MainWindow(QMainWindow):
         self.sig_stream.connect(self.worker.do_stream)
         self.sig_list.connect(self.worker.do_list)
         self.sig_recon.connect(self.worker.do_recon)
+        self.sig_heap.connect(self.worker.do_heap)
 
     def _wire(self):
         self.btn_connect.clicked.connect(self._toggle_connect)
@@ -845,6 +868,18 @@ class MainWindow(QMainWindow):
     def _auto_tick(self):
         if self._connected:
             self.sig_status.emit()
+            self.sig_heap.emit()
+
+    @Slot(int)
+    def _on_heap(self, val):
+        self._heap_hist.append(val)
+        self._heap_hist = self._heap_hist[-60:]
+        try:
+            import companion_compute
+            spark = companion_compute._sparkline(self._heap_hist, width=len(self._heap_hist))
+        except Exception:
+            spark = ""
+        self.lbl_heap.setText("free heap %s B  %s" % (f"{val:,}", spark))
         self.btn_analyze.clicked.connect(
             lambda: self.sig_analyze.emit(self.ed_an_remote.text().strip()))
         self.btn_recon.clicked.connect(self._do_recon)
@@ -930,6 +965,7 @@ class MainWindow(QMainWindow):
         self._log("<span style='color:#27ae60'>connected</span> %s" % _esc(str(info.get("fw"))))
         self._set_enabled(True)
         self.sig_status.emit()
+        self.sig_heap.emit()
         self._fb_refresh()  # populate the device file browser
         if self.chk_auto.isChecked():
             self._auto_timer.start()
