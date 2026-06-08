@@ -60,10 +60,11 @@ def ir_entries():
     return out
 
 
-def _firstbyte(hexstr):
-    """Bruce reads the first byte of address/command; normalise to 2 hex chars."""
-    h = (hexstr or "").replace(" ", "")
-    return h[:2] if h else "00"
+def _hex8(hexstr):
+    """The serial `ir tx` requires 8-char hex address/command (it then uses the
+    first byte internally). Strip spaces, pad/truncate to 8 hex chars."""
+    h = (hexstr or "").replace(" ", "").upper() or "00"
+    return (h + "00000000")[:8]
 
 
 def ir_tx_line(sig):
@@ -72,7 +73,7 @@ def ir_tx_line(sig):
     if sig.get("type") != "parsed":
         return None
     return "ir tx %s %s %s" % (sig.get("protocol", "NEC"),
-                               _firstbyte(sig.get("address")), _firstbyte(sig.get("command")))
+                               _hex8(sig.get("address")), _hex8(sig.get("command")))
 
 
 # ---------------- RFID keys ----------------
