@@ -7,6 +7,7 @@
 #include <Arduino.h>
 
 class SerialCli;
+class SerialDevice;
 
 namespace companion {
 
@@ -16,7 +17,9 @@ namespace companion {
 bool looksLikeFrame(const String &line);
 
 // Process exactly one companion frame line (one BLE write == one frame).
-void handleLine(SerialCli &cli, const String &raw);
+// `reply` is the transport the frame arrived on; responses go back to it (so USB
+// and BLE sessions can run at the same time). nullptr -> use global serialDevice.
+void handleLine(SerialCli &cli, const String &raw, SerialDevice *reply = nullptr);
 
 // Called every serial-task iteration: emits queued async EVT frames (streaming).
 // Non-blocking; no-op unless a stream is active.

@@ -4,7 +4,14 @@
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "utils.h"
+#include <core/USBSerial/USBSerial.h>
 #include <globals.h>
+
+#if !defined(LITE_VERSION)
+// Set while the BLE-API is up (modules/ble_api). We poll it alongside USB so a
+// USB and a BLE companion session can run at the same time.
+extern SerialDevice *bleApiSerial;
+#endif
 
 QueueHandle_t cmdQueue = nullptr;
 QueueHandle_t rspQueue = nullptr;
@@ -35,6 +42,29 @@ bool parseSerialCommand(const String &command, bool waitForResponse) {
     return false;
 }
 
+// Process one waiting line from a single transport. Companion frames are handled
+// non-modally (no backToMenu) with replies routed back to THIS transport; plain
+// CLI lines run the legacy path with output routed here too.
+static void pumpTransport(SerialCli &serialCli, SerialDevice *dev) {
+    if (!dev || !dev->available()) return;
+    String cmd_str = dev->readStringUntil('\n');
+
+    SerialDevice *saved = serialDevice;
+    serialDevice = dev; // route default/legacy output to this transport
+
+    if (bruceConfig.companionEnabled && companion::looksLikeFrame(cmd_str)) {
+        // framed, non-modal — replies go back to `dev`, screen untouched
+        companion::handleLine(serialCli, cmd_str, dev);
+    } else {
+        Serial.println("COMMAND: " + cmd_str);
+        serialCli.parse(cmd_str);
+        dev->print("# ");        // prompt
+        backToMenu();            // forced menu redraw (legacy behavior)
+    }
+
+    serialDevice = saved;
+}
+
 void handleSerialCommands(SerialCli &serialCli) {
     CmdPacket packet;
     if (cmdQueue && rspQueue) {
@@ -48,21 +78,11 @@ void handleSerialCommands(SerialCli &serialCli) {
     // Drain any active companion stream (emits async EVT frames). Non-blocking.
     if (bruceConfig.companionEnabled) companion::tick();
 
-    if (!serialDevice->available()) return;
-
-    String cmd_str = serialDevice->readStringUntil('\n');
-
-    // Companion path: framed, non-modal. We deliberately do NOT call
-    // backToMenu() here, so the user's current screen is left untouched.
-    if (bruceConfig.companionEnabled && companion::looksLikeFrame(cmd_str)) {
-        companion::handleLine(serialCli, cmd_str);
-        return;
-    }
-
-    Serial.println("COMMAND: " + cmd_str);
-    serialCli.parse(cmd_str);
-    serialDevice->print("# "); // prompt
-    backToMenu();              // forced menu redrawn
+    // Poll USB always, and BLE when the BLE-API is up — both run concurrently.
+    pumpTransport(serialCli, &USBserial);
+#if !defined(LITE_VERSION)
+    if (bleApiSerial) pumpTransport(serialCli, bleApiSerial);
+#endif
 }
 
 void _serialCmdsTaskLoop(void *pvParameters) {

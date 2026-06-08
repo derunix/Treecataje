@@ -5,6 +5,11 @@
 #include <core/companion/companion.h>
 #include <globals.h>
 
+// Pointer to the BLE serial device while the BLE-API is up (nullptr otherwise).
+// The serial loop polls this IN ADDITION to USB so both transports work at once;
+// we no longer hijack the global `serialDevice` (it stays = USBserial).
+SerialDevice *bleApiSerial = nullptr;
+
 BLE_API::BLE_API() = default;
 
 class BLEAPICallback : public NimBLEServerCallbacks {
@@ -36,7 +41,7 @@ void BLE_API::setup() {
 
     battery_service.setup(pServer);
     serial_service.setup(pServer);
-    serialDevice = &serial_service;
+    bleApiSerial = &serial_service; // expose for the dual-transport serial loop
 
     BLEAdvertising *pAdvertising = pServer->getAdvertising();
     pAdvertising->enableScanResponse(false); // Save some battery
@@ -57,6 +62,6 @@ void BLE_API::end() {
 #else
     BLEDevice::deinit();
 #endif
-    serialDevice = &USBserial;
+    bleApiSerial = nullptr;
 }
 #endif

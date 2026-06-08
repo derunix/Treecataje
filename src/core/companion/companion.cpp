@@ -23,6 +23,7 @@
 // widely-included settings.h (keeps incremental rebuilds small).
 void enableBLEAPI();
 bool isBLEAPIEnabled();
+extern SerialDevice *bleApiSerial; // BLE serial device (companion over BLE)
 #endif
 
 namespace {
@@ -36,6 +37,18 @@ bool g_authed = false;
 // link (BLE is unencrypted). Nonce is one-shot. Auth is reset on BLE disconnect.
 uint8_t g_nonce[16];
 bool g_haveNonce = false;
+
+// anti-brute: lock out AUTH after too many failures for a cool-down window
+int g_authFails = 0;
+uint32_t g_authLockUntil = 0;
+const int AUTH_MAX_FAILS = 5;
+const uint32_t AUTH_LOCK_MS = 30000;
+
+// Per-frame reply transport (so USB and BLE sessions coexist). emit() targets
+// g_reply when set, else the global serialDevice. g_streamReply is the stream's
+// owning transport (captured at stream start).
+SerialDevice *g_reply = nullptr;
+SerialDevice *g_streamReply = nullptr;
 
 // --- async streaming state (drained in companion::tick, serial-task context) ---
 bool g_streaming = false;
@@ -78,7 +91,8 @@ String fieldValue(const String &payload, const String &key) {
 
 // Emit one raw frame line to the real transport (the current global device).
 void emit(const String &frame) {
-    if (serialDevice) serialDevice->println(frame);
+    SerialDevice *dev = g_reply ? g_reply : serialDevice;
+    if (dev) dev->println(frame);
 }
 
 String toHex(const uint8_t *d, size_t n) {
@@ -434,10 +448,12 @@ void resetAuth() {
     g_haveNonce = false;
     streamTeardown(); // release wifi/nrf radios if a stream was active
     g_streaming = false;
+    g_streamReply = nullptr;
     g_radioOwner = "none";
 }
 
-void handleLine(SerialCli &cli, const String &raw) {
+void handleLine(SerialCli &cli, const String &raw, SerialDevice *reply) {
+    g_reply = reply ? reply : serialDevice; // route this frame's replies back
     String line = raw;
     line.trim();
 
@@ -466,7 +482,10 @@ void handleLine(SerialCli &cli, const String &raw) {
     if (payload.startsWith("HELLO")) {
         bool overBle = false;
 #if !defined(LITE_VERSION)
-        overBle = isBLEAPIEnabled();
+        // "over the air" = this frame arrived on the BLE transport (USB stays
+        // open even while BLE is enabled, so check the reply device, not just
+        // whether BLE is up).
+        overBle = (g_reply != nullptr && g_reply == bleApiSerial);
 #endif
         const String &tokenCfg = bruceConfig.companionToken;
         String helloInfo = "fw=Treecataje/" + String(BRUCE_VERSION) +
@@ -498,8 +517,13 @@ void handleLine(SerialCli &cli, const String &raw) {
         return;
     }
 
-    // --- AUTH: answer to the HELLO challenge ---
+    // --- AUTH: answer to the HELLO challenge (with anti-brute lockout) ---
     if (payload.startsWith("AUTH")) {
+        uint32_t now = millis();
+        if (g_authLockUntil && now < g_authLockUntil) {
+            emit("ERR " + String(id) + " 7 AUTH locked retry_ms=" + String(g_authLockUntil - now));
+            return;
+        }
         if (!g_haveNonce) {
             emit("ERR " + String(id) + " 7 AUTH no-challenge");
             return;
@@ -509,12 +533,19 @@ void handleLine(SerialCli &cli, const String &raw) {
         g_haveNonce = false; // one-shot, even on failure (forces a new HELLO)
         if (resp.length() && resp.equalsIgnoreCase(expect)) {
             g_authed = true;
+            g_authFails = 0;
             emit("RSP " + String(id) + " ok auth=ok");
             emit("RSP " + String(id) + " caps=" + buildCaps());
             emit("END " + String(id) + " 0");
         } else {
             g_authed = false;
-            emit("ERR " + String(id) + " 7 AUTH");
+            if (++g_authFails >= AUTH_MAX_FAILS) {
+                g_authLockUntil = now + AUTH_LOCK_MS;
+                g_authFails = 0;
+                emit("ERR " + String(id) + " 7 AUTH locked retry_ms=" + String(AUTH_LOCK_MS));
+            } else {
+                emit("ERR " + String(id) + " 7 AUTH");
+            }
         }
         return;
     }
@@ -617,6 +648,7 @@ void handleLine(SerialCli &cli, const String &raw) {
         g_streamSeq = 0;
         g_streamKind = kind;
         g_streamLastMs = 0; // emit first tick immediately
+        g_streamReply = g_reply; // EVTs go back to the transport that started it
         g_radioOwner = "companion";
         emit("RSP " + String(id) + " streaming=" + kind + " id=" + String(id) +
              " interval=" + String(g_streamInterval) +
@@ -638,9 +670,9 @@ void handleLine(SerialCli &cli, const String &raw) {
         return;
     }
 #if !defined(LITE_VERSION)
-    // Enable/disable the BLE API remotely. IMPORTANT: respond on the CURRENT
-    // transport BEFORE toggling, because enableBLEAPI() switches the global
-    // serialDevice (USB <-> BLE).
+    // Enable/disable the BLE API remotely. With dual-transport the global
+    // serialDevice is NOT hijacked, so USB stays alive after enabling BLE — the
+    // two run concurrently.
     if (payload.startsWith("companion ble")) {
         String arg = payload.substring(String("companion ble").length());
         arg.trim();
@@ -652,7 +684,7 @@ void handleLine(SerialCli &cli, const String &raw) {
             } else {
                 emit("RSP " + String(id) + " ble=on name=Bruc");
                 emit("END " + String(id) + " 0");
-                enableBLEAPI(); // serialDevice -> BLE after we replied on USB
+                enableBLEAPI(); // USB remains usable (no serialDevice switch)
             }
         } else if (arg == "off") {
             if (!on) {
@@ -661,7 +693,7 @@ void handleLine(SerialCli &cli, const String &raw) {
             } else {
                 emit("RSP " + String(id) + " ble=off");
                 emit("END " + String(id) + " 0");
-                enableBLEAPI(); // serialDevice -> USB after we replied on BLE
+                enableBLEAPI(); // disable BLE; USB unaffected
             }
         } else { // status
             emit("RSP " + String(id) + " ble=" + String(on ? "on" : "off"));
@@ -695,8 +727,10 @@ void handleLine(SerialCli &cli, const String &raw) {
     }
 
     // --- generic: run an existing CLI command, framed, NO backToMenu ---
+    // Frame output to the transport this request arrived on (g_reply), so a
+    // command run over BLE replies over BLE while USB stays on its own session.
     SerialDevice *prev = serialDevice;
-    g_framing.setInner(prev);
+    g_framing.setInner(g_reply ? g_reply : prev);
     g_framing.beginRequest(id);
     serialDevice = &g_framing;
     bool okCmd = cli.parse(payload);
@@ -706,6 +740,7 @@ void handleLine(SerialCli &cli, const String &raw) {
 
 void tick() {
     if (!g_streaming) return;
+    g_reply = g_streamReply; // EVTs go to the transport that started the stream
     uint32_t now = millis();
     // WiFi manages its own cadence (async scan): poll every tick.
     if (g_streamKind == "wifi") {

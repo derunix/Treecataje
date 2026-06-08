@@ -4,6 +4,11 @@
 #include "services/BLESerialService.h"
 #include "services/BatteryService.hpp"
 
+class SerialDevice;
+// BLE serial device while the BLE-API is up (nullptr otherwise). Polled by the
+// serial loop alongside USB so USB and BLE companion sessions run concurrently.
+extern SerialDevice *bleApiSerial;
+
 class BLE_API {
 public:
     BLE_API();

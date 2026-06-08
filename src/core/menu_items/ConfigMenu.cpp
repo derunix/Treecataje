@@ -5,6 +5,10 @@
 #include "core/settings.h"
 #include "core/utils.h"
 #include "core/wifi/wifi_common.h"
+
+#if !defined(LITE_VERSION)
+bool isBLEAPIEnabled(); // settings.cpp — current BLE-API (companion BLE) state
+#endif
 #ifdef HAS_RGB_LED
 #include "core/led_control.h"
 #endif
@@ -189,7 +193,8 @@ void ConfigMenu::advancedMenu() {
     while (true) {
         std::vector<Option> localOptions = {
 #if !defined(LITE_VERSION)
-            {"Toggle BLE API", [this]() { enableBLEAPI(); }       },
+            {String("Companion BLE: ") + (isBLEAPIEnabled() ? "ON" : "OFF"),
+                                      [this]() { enableBLEAPI(); }       },
             {"BadUSB/BLE",     [this]() { setBadUSBBLEMenu(); }   },
 #endif
             {"Network Creds",  [this]() { setNetworkCredsMenu(); }},

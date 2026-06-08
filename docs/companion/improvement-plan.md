@@ -44,7 +44,9 @@ enable/disable» (флаг `companionEnabled`) и показ/QR токена.
 ## 1. Firmware roadmap
 
 ### 1.1 Транспорт и параллелизм
-- ⬜ **P1 / L — Одновременный USB+BLE** (см. §0): per-request reply-device, опрос обоих входов.
+- 🟢 **Одновременный USB+BLE** (Sprint A): `serialDevice` больше не перехватывается;
+  `serialcmds.cpp` опрашивает USB + `bleApiSerial`; per-frame reply-device в
+  `companion::handleLine(..., reply)`/`emit()`; стрим помнит транспорт-владельца.
 - ⬜ **P2 / M — Раздельные сессии auth** на каждый транспорт (сейчас один `g_authed`;
   при двух транспортах нужен `authed[USB]`, `authed[BLE]`).
 - ⬜ **P2 / S — Больший BLE MTU по факту**: запросили `setMTU(517)`, но передача файлов
@@ -54,7 +56,9 @@ enable/disable» (флаг `companionEnabled`) и показ/QR токена.
 
 ### 1.2 Безопасность (Phase 6 расширение)
 - 🟢 challenge-response токен, BLE-замок, сброс при дисконнекте, персист.
-- ⬜ **P1 / S — Анти-brute**: лимит попыток AUTH + пауза/разрыв после N неудач.
+- 🟢 **Анти-brute** (Sprint A): после 5 неудачных AUTH — блокировка на 30 с
+  (`ERR 7 AUTH locked retry_ms=…`). ЗАМЕТКА: lockout глобальный — потенциальный DoS
+  легитимной сессии; сделать per-transport позже.
 - ⬜ **P2 / S — Меню/QR токена на устройстве** (как webUI-креды): показать/сгенерировать.
 - ⬜ **P3 / M — Уровни доступа**: радио-TX (`rf tx`, `nrf jam`, `ir tx`) только после
   «расширенной» авторизации/подтверждения на устройстве.
@@ -71,7 +75,8 @@ enable/disable» (флаг `companionEnabled`) и показ/QR токена.
 - ⬜ **P3 / S — параметры стрима** (rf шаг/число бинов, nrf диапазон каналов).
 
 ### 1.4 UX устройства / меню
-- 🟡 **P2 / S — «Companion BLE on/off» пункт меню** с состоянием (см. §0).
+- 🟢 **«Companion BLE: ON/OFF» пункт меню** с состоянием (Sprint A): ConfigMenu →
+  Advanced, динамический label через `isBLEAPIEnabled()`; включение больше не глушит USB.
 - ⬜ **P2 / S — «Companion enable/disable»** пункт + индикатор активной сессии (иконка
   «host connected» в статус-баре).
 - ⬜ **P3 / S — арбитраж радио с UI**: companion уважает `g_radioOwner` и UI тоже
