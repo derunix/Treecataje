@@ -345,6 +345,79 @@ def device_token_status() -> str:
 
 
 @mcp.tool()
+def device_dict_list(category: str = "all") -> str:
+    """List the host dictionaries (curated, device-compatible reference data).
+    category: all | ir | rfid | subghz. Shows IR brands/signals, RFID key files,
+    and sub-GHz captures available to send/deploy."""
+    try:
+        import companion_dicts as cd
+        out = []
+        if category in ("all", "ir"):
+            by = {}
+            for e in cd.ir_entries():
+                by.setdefault(e["brand"], []).append(e)
+            out.append("IR signals:")
+            for brand in sorted(by):
+                names = ", ".join(s["name"] for s in by[brand])
+                out.append(f"  {brand}: {names}")
+        if category in ("all", "rfid"):
+            out.append("RFID key dicts:")
+            for p in cd.key_files():
+                out.append(f"  {os.path.basename(p)} ({len(cd.parse_keys(p))} keys)")
+        if category in ("all", "subghz"):
+            subs = cd.sub_files()
+            out.append("Sub-GHz: " + (", ".join(os.path.basename(p) for p in subs) or "(none)"))
+        return "\n".join(out)
+    except Exception as e:  # noqa: BLE001
+        return f"error: {e}"
+
+
+@mcp.tool()
+def device_ir_send(brand: str, name: str = "Power") -> str:
+    """Send an IR signal from the host dictionary via 'ir tx' (no upload).
+    brand e.g. "Samsung_TV", name e.g. "Power"/"Vol_up". See device_dict_list."""
+    with _lock:
+        try:
+            _ensure()
+            import companion_dicts as cd
+            match = [e for e in cd.ir_entries()
+                     if e["brand"].lower() == brand.lower() and e["name"].lower() == name.lower()]
+            if not match:
+                return f"no IR signal {brand}/{name} (see device_dict_list)"
+            line = cd.ir_tx_line(match[0])
+            if not line:
+                return "raw IR signal — deploy + ir tx_from_file instead"
+            return _fmt(_dev.request(line, timeout=8.0))
+        except Exception as e:  # noqa: BLE001
+            return f"error: {e}"
+
+
+@mcp.tool()
+def device_deploy_keys(keyfile: str = "") -> str:
+    """Build a MIFARE keys.conf from the host RFID dictionary(ies) and upload it
+    to the device (/BruceRFID/keys.conf). keyfile: a specific *.keys basename, or
+    empty to merge all."""
+    with _lock:
+        try:
+            _ensure()
+            import companion_dicts as cd, tempfile
+            files = cd.key_files()
+            if keyfile:
+                files = [p for p in files if os.path.basename(p) == keyfile]
+                if not files:
+                    return f"no key file {keyfile}"
+            text = cd.build_keys_conf(files)
+            tmp = os.path.join(tempfile.gettempdir(), "keys.conf")
+            with open(tmp, "w") as fh:
+                fh.write(text)
+            out = _dev.file_put(tmp, cd.DEV_RFID_KEYS, chunk=192 if _transport == "ble" else 512, timeout=60)
+            n = sum(1 for ln in text.splitlines() if not ln.startswith("//"))
+            return f"deployed {n} keys -> {cd.DEV_RFID_KEYS}  ok={out['ok']}"
+        except Exception as e:  # noqa: BLE001
+            return f"error: {e}"
+
+
+@mcp.tool()
 def device_disconnect() -> str:
     """Close the transport to the device."""
     global _dev

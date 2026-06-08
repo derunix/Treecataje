@@ -46,8 +46,10 @@ def main():
         print(f"  [{'PASS' if cond else 'FAIL'}] {name}" + (f" — {detail}" if detail else ""))
 
     # construction
-    check("window built", win.tabs.count() == 5, f"{win.tabs.count()} tabs")
+    check("window built", win.tabs.count() == 6, f"{win.tabs.count()} tabs")
     check("functions groups populated", win.fn_groups.count() >= 10, f"{win.fn_groups.count()} groups")
+    check("dictionaries populated", win.dict_tree.topLevelItemCount() == 3,
+          f"{win.dict_tree.topLevelItemCount()} categories")
     check("console disabled pre-connect", not win.btn_send.isEnabled())
 
     if args.no_device:

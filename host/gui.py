@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
     QComboBox, QTextEdit, QPlainTextEdit, QTabWidget, QFileDialog, QSpinBox,
     QHBoxLayout, QVBoxLayout, QFormLayout, QGroupBox, QSplitter,
     QListWidget, QStackedWidget, QScrollArea, QMessageBox, QFrame, QCheckBox,
+    QTreeWidget, QTreeWidgetItem,
 )
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -298,6 +299,7 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self._tab_files(), "Files")
         self.tabs.addTab(self._tab_stream(), "Stream")
         self.tabs.addTab(self._tab_analyze(), "Analyze")
+        self.tabs.addTab(self._tab_dicts(), "Dictionaries")
         split.addWidget(self.tabs)
         split.setSizes([300, 700])
 
@@ -513,6 +515,130 @@ class MainWindow(QMainWindow):
             label = f"📁 {name}/" if is_dir else f"   {name}   ({_human(size)})"
             self.fb_list.addItem(label)
 
+    # ---------- dictionaries ----------
+    def _tab_dicts(self):
+        w = QWidget(); v = QVBoxLayout(w)
+        self.dict_tree = QTreeWidget(); self.dict_tree.setHeaderHidden(True)
+        self.dict_tree.setFont(_mono())
+        v.addWidget(self.dict_tree, 1)
+        acts = QHBoxLayout()
+        self.btn_dict_send = QPushButton("Send (ir tx)")
+        self.btn_dict_deploy = QPushButton("Deploy to device")
+        self.btn_dict_tx = QPushButton("Upload + TX file")
+        self.btn_dict_reload = QPushButton("⟳ Reload")
+        for b in (self.btn_dict_send, self.btn_dict_deploy, self.btn_dict_tx, self.btn_dict_reload):
+            acts.addWidget(b)
+        acts.addStretch(1)
+        v.addLayout(acts)
+        self.txt_dict = QPlainTextEdit(readOnly=True); self.txt_dict.setMaximumHeight(120)
+        self.txt_dict.setFont(_mono())
+        v.addWidget(self.txt_dict)
+        self._build_dict_tree()
+        return w
+
+    def _build_dict_tree(self):
+        import companion_dicts as cd
+        self.dict_tree.clear()
+        # IR
+        ir_root = QTreeWidgetItem(["IR signals"])
+        self.dict_tree.addTopLevelItem(ir_root)
+        by_brand = {}
+        for e in cd.ir_entries():
+            by_brand.setdefault(e["brand"], []).append(e)
+        for brand in sorted(by_brand):
+            bnode = QTreeWidgetItem([brand])
+            bnode.setData(0, Qt.UserRole, {"kind": "ir_file", "path": by_brand[brand][0]["path"]})
+            ir_root.addChild(bnode)
+            for e in by_brand[brand]:
+                sline = cd.ir_tx_line(e) or "(raw)"
+                leaf = QTreeWidgetItem([f"{e['name']}  [{e.get('protocol','?')}]  {sline}"])
+                leaf.setData(0, Qt.UserRole, {"kind": "ir_sig", "sig": e})
+                bnode.addChild(leaf)
+        # RFID keys
+        rfid_root = QTreeWidgetItem(["RFID key dictionaries"])
+        self.dict_tree.addTopLevelItem(rfid_root)
+        for p in cd.key_files():
+            n = len(cd.parse_keys(p))
+            it = QTreeWidgetItem([f"{os.path.basename(p)}  ({n} keys)"])
+            it.setData(0, Qt.UserRole, {"kind": "keys", "path": p})
+            rfid_root.addChild(it)
+        # sub-GHz
+        sub_root = QTreeWidgetItem(["Sub-GHz captures"])
+        self.dict_tree.addTopLevelItem(sub_root)
+        subs = cd.sub_files()
+        if not subs:
+            sub_root.addChild(QTreeWidgetItem(["(drop .sub files in dictionaries/subghz/)"]))
+        for p in subs:
+            it = QTreeWidgetItem([os.path.basename(p)])
+            it.setData(0, Qt.UserRole, {"kind": "sub", "path": p})
+            sub_root.addChild(it)
+        ir_root.setExpanded(True); rfid_root.setExpanded(True)
+
+    def _dict_data(self):
+        it = self.dict_tree.currentItem()
+        return it.data(0, Qt.UserRole) if it else None
+
+    def _dlog(self, msg):
+        self.txt_dict.appendPlainText(msg)
+
+    def _dict_send(self):
+        import companion_dicts as cd
+        d = self._dict_data()
+        if not d or d.get("kind") != "ir_sig":
+            self._dlog("select an IR signal to Send"); return
+        line = cd.ir_tx_line(d["sig"])
+        if not line:
+            self._dlog("raw IR — use Upload + TX file"); return
+        self._dlog("> " + line)
+        self.sig_request.emit(line, 8.0)
+
+    def _dict_deploy(self):
+        import companion_dicts as cd
+        d = self._dict_data()
+        if not d:
+            self._dlog("select an item to deploy"); return
+        kind = d["kind"]
+        try:
+            if kind in ("ir_sig", "ir_file"):
+                local = d["sig"]["path"] if kind == "ir_sig" else d["path"]
+                remote = cd.deploy_remote("ir", local)
+                self._dlog(f"upload {os.path.basename(local)} -> {remote}")
+                self.sig_file_put.emit(local, remote)
+            elif kind == "keys":
+                os.makedirs(CAP_DIR, exist_ok=True)
+                tmp = os.path.join(CAP_DIR, "keys.conf")
+                with open(tmp, "w") as fh:
+                    fh.write(cd.build_keys_conf([d["path"]]))
+                self._dlog(f"upload merged keys.conf -> {cd.DEV_RFID_KEYS}")
+                self.sig_file_put.emit(tmp, cd.DEV_RFID_KEYS)
+            elif kind == "sub":
+                remote = cd.deploy_remote("subghz", d["path"])
+                self._dlog(f"upload {os.path.basename(d['path'])} -> {remote}")
+                self.sig_file_put.emit(d["path"], remote)
+        except Exception as e:  # noqa: BLE001
+            self._dlog(f"deploy error: {e}")
+
+    def _dict_tx(self):
+        """Upload the file then transmit it from the device (IR/sub)."""
+        import companion_dicts as cd
+        d = self._dict_data()
+        if not d:
+            return
+        kind = d["kind"]
+        if kind in ("ir_sig", "ir_file"):
+            local = d["sig"]["path"] if kind == "ir_sig" else d["path"]
+            remote = cd.deploy_remote("ir", local)
+            self.sig_file_put.emit(local, remote)
+            self._dlog(f"upload+tx {remote}")
+            QTimer.singleShot(1500, lambda: self.sig_request.emit(f"ir tx_from_file {remote}", 15.0))
+        elif kind == "sub":
+            remote = cd.deploy_remote("subghz", d["path"])
+            self.sig_file_put.emit(d["path"], remote)
+            self._dlog(f"upload+tx {remote}")
+            QTimer.singleShot(1500, lambda: self.sig_request.emit(f"rf tx_from_file {remote}", 15.0))
+        else:
+            self._dlog("Upload + TX applies to IR / sub-GHz files")
+
     def _tab_stream(self):
         w = QWidget(); v = QVBoxLayout(w)
         row = QHBoxLayout()
@@ -628,6 +754,11 @@ class MainWindow(QMainWindow):
         self.btn_stream_save.clicked.connect(self._save_stream)
         self.btn_stream_load.clicked.connect(self._load_stream)
         self.chk_auto.toggled.connect(self._toggle_auto)
+        self.btn_dict_send.clicked.connect(self._dict_send)
+        self.btn_dict_deploy.clicked.connect(self._dict_deploy)
+        self.btn_dict_tx.clicked.connect(self._dict_tx)
+        self.btn_dict_reload.clicked.connect(self._build_dict_tree)
+        self.dict_tree.itemDoubleClicked.connect(lambda *_: self._dict_send())
 
     def _toggle_auto(self, on):
         if on and self._connected:
@@ -778,7 +909,8 @@ class MainWindow(QMainWindow):
         for wdg in (self.ed_cmd, self.btn_send, self.btn_refresh, self.btn_get,
                     self.btn_put, self.btn_browse, self.btn_stream, self.btn_analyze,
                     self.btn_fb_up, self.btn_fb_refresh, self.btn_fb_dl,
-                    self.btn_fb_view, self.btn_fb_del):
+                    self.btn_fb_view, self.btn_fb_del,
+                    self.btn_dict_send, self.btn_dict_deploy, self.btn_dict_tx):
             wdg.setEnabled(on)
         # "Analyze last" works offline on already-collected events
         self.btn_stream_an.setEnabled(True)
