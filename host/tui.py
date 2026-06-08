@@ -43,11 +43,13 @@ class CompanionTUI(App):
         ("ctrl+l", "clear", "Clear log"),
     ]
 
-    def __init__(self, port: str, token: str = ""):
+    def __init__(self, port: str, token: str = "", transport: str = "usb", name: str = "Bruc"):
         super().__init__()
         self.port = port
         self.token = token
-        self.dev: Companion | None = None
+        self.transport = transport
+        self.ble_name = name
+        self.dev = None
         self._lock = asyncio.Lock()
         # last-rendered panel text (also handy for headless testing)
         self.last_devinfo = ""
@@ -110,8 +112,14 @@ class CompanionTUI(App):
     async def connect(self) -> None:
         try:
             async with self._lock:
-                self.dev = await asyncio.to_thread(Companion, self.port)
-                info = await asyncio.to_thread(self.dev.hello, self.token)
+                if self.transport == "ble":
+                    from mcp_server import BleSync
+                    self.write_log("[dim]scanning BLE '%s'… (needs 'companion ble on')[/dim]" % self.ble_name)
+                    self.dev = await asyncio.to_thread(lambda: BleSync(name=self.ble_name, token=self.token))
+                    info = self.dev.info
+                else:
+                    self.dev = await asyncio.to_thread(Companion, self.port)
+                    info = await asyncio.to_thread(self.dev.hello, self.token)
             if not info.get("ok"):
                 self.query_one("#devinfo", Static).update("[red]HELLO failed[/red]")
                 self.write_log("[red]HELLO failed[/red]")
@@ -194,8 +202,11 @@ def main():
     ap.add_argument("--port", default="/dev/ttyACM1")
     ap.add_argument("--token", default=os.environ.get("COMPANION_TOKEN", ""),
                     help="companion auth token (required if the device has one set)")
+    ap.add_argument("--transport", default="usb", choices=("usb", "ble"),
+                    help="usb (serial) or ble (enable it on the device first via 'companion ble on')")
+    ap.add_argument("--name", default="Bruc", help="BLE advertised name")
     args = ap.parse_args()
-    CompanionTUI(args.port, args.token).run()
+    CompanionTUI(args.port, args.token, args.transport, args.name).run()
 
 
 if __name__ == "__main__":

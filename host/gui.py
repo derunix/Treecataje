@@ -15,7 +15,7 @@ import os
 import sys
 import argparse
 
-from PySide6.QtCore import Qt, QObject, QThread, Signal, Slot
+from PySide6.QtCore import Qt, QObject, QThread, Signal, Slot, QTimer
 from PySide6.QtGui import QFont, QTextCursor
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QLabel, QLineEdit, QPushButton,
@@ -45,6 +45,7 @@ class DeviceWorker(QObject):
     response = Signal(str, list, int, str)  # cmd, lines, code, error
     report = Signal(str)         # analyze report text
     stream_done = Signal(list, list)        # start_lines, events
+    listing = Signal(str, list)  # path, [(name, is_dir, size)]
     error = Signal(str)
 
     def __init__(self):
@@ -110,6 +111,27 @@ class DeviceWorker(QObject):
         except Exception as e:  # noqa: BLE001
             self.error.emit("status error: %s" % e)
 
+    @Slot(str)
+    def do_list(self, path):
+        if self.dev is None:
+            self.error.emit("not connected")
+            return
+        try:
+            r = self.dev.request("ls " + path, timeout=12.0)
+            entries = []
+            for ln in r.lines:
+                if "\t" not in ln:
+                    continue
+                name, _, rest = ln.partition("\t")
+                rest = rest.strip()
+                is_dir = (rest == "<DIR>")
+                size = -1 if is_dir else (int(rest) if rest.isdigit() else 0)
+                if name.strip():
+                    entries.append((name.strip(), is_dir, size))
+            self.listing.emit(path, entries)
+        except Exception as e:  # noqa: BLE001
+            self.error.emit("list error: %s" % e)
+
     @Slot(str, str)
     def do_file_get(self, remote, local):
         if self.dev is None:
@@ -174,6 +196,7 @@ class MainWindow(QMainWindow):
     sig_file_put = Signal(str, str)
     sig_analyze = Signal(str)
     sig_stream = Signal(str, float)
+    sig_list = Signal(str)
 
     def __init__(self, port="/dev/ttyACM1"):
         super().__init__()
@@ -346,26 +369,118 @@ class MainWindow(QMainWindow):
         return w
 
     def _tab_files(self):
-        w = QWidget(); f = QFormLayout(w)
+        w = QWidget(); v = QVBoxLayout(w)
+        # --- device file browser ---
+        nav = QHBoxLayout()
+        self.btn_fb_up = QPushButton("↑ Up")
+        self.btn_fb_refresh = QPushButton("⟳")
+        self.lbl_cwd = QLineEdit("/"); self.lbl_cwd.setReadOnly(True)
+        nav.addWidget(self.btn_fb_up); nav.addWidget(self.btn_fb_refresh)
+        nav.addWidget(QLabel("path")); nav.addWidget(self.lbl_cwd, 1)
+        v.addLayout(nav)
+        self.fb_list = QListWidget(); self.fb_list.setFont(_mono())
+        v.addWidget(self.fb_list, 1)
+        acts = QHBoxLayout()
+        self.btn_fb_dl = QPushButton("Download")
+        self.btn_fb_view = QPushButton("View")
+        self.btn_fb_del = QPushButton("Delete")
+        self.btn_fb_del.setStyleSheet("QPushButton{color:#c0392b;}")
+        acts.addWidget(self.btn_fb_dl); acts.addWidget(self.btn_fb_view)
+        acts.addWidget(self.btn_fb_del); acts.addStretch(1)
+        v.addLayout(acts)
+        self._cwd = "/"
+        self._fb_entries = []  # aligned with fb_list rows: (name, is_dir, size)
+
+        # --- manual get/put (kept) ---
+        form = QFormLayout()
         self.ed_get_remote = QLineEdit("/bruce.conf")
         rget = QHBoxLayout()
         self.btn_get = QPushButton("Download →")
         rget.addWidget(self.ed_get_remote, 1); rget.addWidget(self.btn_get)
-        f.addRow("remote get", _wrap(rget))
-
+        form.addRow("remote get", _wrap(rget))
         self.ed_put_local = QLineEdit()
         self.btn_browse = QPushButton("Browse…")
         rb = QHBoxLayout(); rb.addWidget(self.ed_put_local, 1); rb.addWidget(self.btn_browse)
-        f.addRow("local file", _wrap(rb))
+        form.addRow("local file", _wrap(rb))
         self.ed_put_remote = QLineEdit("/upload.bin")
         rput = QHBoxLayout()
         self.btn_put = QPushButton("Upload ↑")
         rput.addWidget(self.ed_put_remote, 1); rput.addWidget(self.btn_put)
-        f.addRow("remote put", _wrap(rput))
+        form.addRow("remote put", _wrap(rput))
         self.lbl_files = QLabel("downloads → %s" % DL_DIR)
         self.lbl_files.setWordWrap(True)
-        f.addRow(self.lbl_files)
+        form.addRow(self.lbl_files)
+        v.addLayout(form)
         return w
+
+    # ---------- file browser ----------
+    def _fb_refresh(self):
+        if self._connected:
+            self.lbl_cwd.setText(self._cwd)
+            self.sig_list.emit(self._cwd)
+
+    def _fb_up(self):
+        if self._cwd not in ("/", ""):
+            self._cwd = self._cwd.rsplit("/", 1)[0] or "/"
+            self._fb_refresh()
+
+    def _fb_join(self, name):
+        return (self._cwd.rstrip("/") + "/" + name) if self._cwd != "/" else "/" + name
+
+    def _fb_selected(self):
+        row = self.fb_list.currentRow()
+        if 0 <= row < len(self._fb_entries):
+            return self._fb_entries[row]
+        return None
+
+    def _fb_activate(self, item):
+        e = self._fb_selected()
+        if not e:
+            return
+        name, is_dir, _ = e
+        if is_dir:
+            self._cwd = self._fb_join(name)
+            self._fb_refresh()
+        else:
+            self._fb_download(self._fb_join(name))
+
+    def _fb_download(self, remote):
+        os.makedirs(DL_DIR, exist_ok=True)
+        local = os.path.join(DL_DIR, os.path.basename(remote))
+        self.sig_file_get.emit(remote, local)
+
+    def _fb_dl_clicked(self):
+        e = self._fb_selected()
+        if e and not e[1]:
+            self._fb_download(self._fb_join(e[0]))
+
+    def _fb_view_clicked(self):
+        e = self._fb_selected()
+        if e and not e[1]:
+            self.sig_request.emit("cat " + self._fb_join(e[0]), 12.0)
+            self.tabs.setCurrentIndex(1)  # show Console where output lands
+
+    def _fb_del_clicked(self):
+        e = self._fb_selected()
+        if not e:
+            return
+        name, is_dir, _ = e
+        path = self._fb_join(name)
+        kind = "directory" if is_dir else "file"
+        if QMessageBox.question(self, "Delete", f"Delete {kind}:\n  {path} ?",
+                                QMessageBox.Yes | QMessageBox.No, QMessageBox.No) != QMessageBox.Yes:
+            return
+        self.sig_request.emit(("rmdir " if is_dir else "rm ") + path, 8.0)
+        QTimer.singleShot(700, self._fb_refresh)
+
+    @Slot(str, list)
+    def _on_listing(self, path, entries):
+        self.lbl_cwd.setText(path)
+        self.fb_list.clear()
+        self._fb_entries = sorted(entries, key=lambda e: (not e[1], e[0].lower()))
+        for name, is_dir, size in self._fb_entries:
+            label = f"📁 {name}/" if is_dir else f"   {name}   ({_human(size)})"
+            self.fb_list.addItem(label)
 
     def _tab_stream(self):
         w = QWidget(); v = QVBoxLayout(w)
@@ -422,6 +537,7 @@ class MainWindow(QMainWindow):
         self.worker.response.connect(self._on_response)
         self.worker.report.connect(self.txt_report.setPlainText)
         self.worker.stream_done.connect(self._on_stream_done)
+        self.worker.listing.connect(self._on_listing)
         self.worker.error.connect(self._on_error)
 
         self.sig_connect.connect(self.worker.do_connect)
@@ -432,6 +548,7 @@ class MainWindow(QMainWindow):
         self.sig_file_put.connect(self.worker.do_file_put)
         self.sig_analyze.connect(self.worker.do_analyze)
         self.sig_stream.connect(self.worker.do_stream)
+        self.sig_list.connect(self.worker.do_list)
 
     def _wire(self):
         self.btn_connect.clicked.connect(self._toggle_connect)
@@ -443,6 +560,12 @@ class MainWindow(QMainWindow):
         self.btn_put.clicked.connect(self._do_put)
         self.btn_stream.clicked.connect(self._do_stream)
         self.btn_stream_an.clicked.connect(self._analyze_last_stream)
+        self.btn_fb_up.clicked.connect(self._fb_up)
+        self.btn_fb_refresh.clicked.connect(self._fb_refresh)
+        self.fb_list.itemDoubleClicked.connect(self._fb_activate)
+        self.btn_fb_dl.clicked.connect(self._fb_dl_clicked)
+        self.btn_fb_view.clicked.connect(self._fb_view_clicked)
+        self.btn_fb_del.clicked.connect(self._fb_del_clicked)
         self.btn_analyze.clicked.connect(
             lambda: self.sig_analyze.emit(self.ed_an_remote.text().strip()))
 
@@ -526,6 +649,7 @@ class MainWindow(QMainWindow):
         self._log("<span style='color:#27ae60'>connected</span> %s" % _esc(str(info.get("fw"))))
         self._set_enabled(True)
         self.sig_status.emit()
+        self._fb_refresh()  # populate the device file browser
 
     @Slot()
     def _on_disconnected(self):
@@ -577,7 +701,9 @@ class MainWindow(QMainWindow):
     # ---------- helpers ----------
     def _set_enabled(self, on):
         for wdg in (self.ed_cmd, self.btn_send, self.btn_refresh, self.btn_get,
-                    self.btn_put, self.btn_browse, self.btn_stream, self.btn_analyze):
+                    self.btn_put, self.btn_browse, self.btn_stream, self.btn_analyze,
+                    self.btn_fb_up, self.btn_fb_refresh, self.btn_fb_dl,
+                    self.btn_fb_view, self.btn_fb_del):
             wdg.setEnabled(on)
         # "Analyze last" works offline on already-collected events
         self.btn_stream_an.setEnabled(True)
@@ -593,6 +719,15 @@ class MainWindow(QMainWindow):
             self.thread.wait(2000)
         finally:
             super().closeEvent(ev)
+
+
+def _human(n):
+    if n < 0:
+        return ""
+    for u in ("B", "K", "M", "G"):
+        if n < 1024 or u == "G":
+            return f"{n}{u}" if u == "B" else f"{n:.1f}{u}"
+        n /= 1024
 
 
 def _mono():

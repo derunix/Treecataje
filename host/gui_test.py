@@ -96,6 +96,15 @@ def main():
         check("functions button round-tripped", "END code=" in win.txt_fn_out.toPlainText(),
               win.txt_fn_out.toPlainText().splitlines()[-1:] )
 
+        # device file browser: list "/" and check it populated
+        win._cwd = "/"
+        win._fb_refresh()
+        for _ in range(40):
+            _spin(100)
+            if win.fb_list.count() > 0:
+                break
+        check("file browser listed /", win.fb_list.count() > 0, f"{win.fb_list.count()} entries")
+
     # disconnect
     win.sig_disconnect.emit()
     for _ in range(20):
