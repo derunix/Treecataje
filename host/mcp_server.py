@@ -345,6 +345,23 @@ def device_token_status() -> str:
 
 
 @mcp.tool()
+def device_recon(seconds: float = 6.0) -> str:
+    """One-shot RF recon: stream WiFi, NRF24, and sub-GHz in sequence, analyze
+    each on the host, and return a combined report (AP table+vendors, NRF channel
+    activity, sub-GHz spectrum). `seconds` ~ the WiFi window; nrf/rf use ~70%."""
+    with _lock:
+        try:
+            _ensure()
+            import companion_compute as cc
+            fn = lambda k, s: _dev.stream(k, duration=s).get("events", [])
+            results = cc.run_recon(fn, wifi_s=seconds, nrf_s=max(2.0, seconds * 0.7),
+                                   rf_s=max(2.0, seconds * 0.7))
+            return cc.recon_report(results)
+        except Exception as e:  # noqa: BLE001
+            return f"error: {e}"
+
+
+@mcp.tool()
 def device_dict_list(category: str = "all") -> str:
     """List the host dictionaries (curated, device-compatible reference data).
     category: all | ir | rfid | subghz. Shows IR brands/signals, RFID key files,

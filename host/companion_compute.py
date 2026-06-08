@@ -313,6 +313,27 @@ def analyze_stream_file(path):
     return analyze_stream(kind, events)
 
 
+def run_recon(stream_fn, wifi_s=6.0, nrf_s=4.0, rf_s=4.0, rf_band=(433.0, 434.8)):
+    """Sweep wifi -> nrf -> rf using stream_fn(kind, seconds)->events. Returns a
+    list of (kind, events). stream_fn is supplied by the caller (device-agnostic)."""
+    results = []
+    results.append(("wifi", stream_fn("wifi", wifi_s)))
+    results.append(("nrf", stream_fn("nrf", nrf_s)))
+    rfk = "rf %g %g" % rf_band
+    results.append((rfk, stream_fn(rfk, rf_s)))
+    return results
+
+
+def recon_report(results, when=""):
+    """Combine per-stream analyses into one markdown report."""
+    out = ["# Companion recon report"]
+    if when:
+        out.append(when)
+    for kind, events in results:
+        out += ["", "## " + kind, "", analyze_stream(kind, events)]
+    return "\n".join(out) + "\n"
+
+
 def analyze_stream(kind, events):
     """Report on a collected list of EVT payloads from companion stream <kind>."""
     base = (kind or "").split()[0] if kind else ""

@@ -185,6 +185,23 @@ class DeviceWorker(QObject):
         except Exception as e:  # noqa: BLE001
             self.error.emit("put error: %s" % e)
 
+    @Slot(float)
+    def do_recon(self, secs):
+        if self.dev is None:
+            self.error.emit("not connected")
+            return
+        try:
+            import companion_compute as cc
+            import time
+            self.log.emit("recon: scanning wifi/nrf/rf …")
+            fn = lambda k, s: self.dev.stream(k, duration=s).get("events", [])
+            results = cc.run_recon(fn, wifi_s=secs, nrf_s=max(2.0, secs * 0.7),
+                                   rf_s=max(2.0, secs * 0.7))
+            report = cc.recon_report(results, when=time.strftime("%Y-%m-%d %H:%M:%S"))
+            self.report.emit(report)
+        except Exception as e:  # noqa: BLE001
+            self.error.emit("recon error: %s" % e)
+
     @Slot(str)
     def do_analyze(self, remote):
         if self.dev is None:
@@ -223,6 +240,7 @@ class MainWindow(QMainWindow):
     sig_analyze = Signal(str)
     sig_stream = Signal(str, float)
     sig_list = Signal(str)
+    sig_recon = Signal(float)
 
     def __init__(self, port="/dev/ttyACM1"):
         super().__init__()
@@ -730,12 +748,39 @@ class MainWindow(QMainWindow):
         row = QHBoxLayout()
         self.ed_an_remote = QLineEdit("/nrf_scan.log")
         self.btn_analyze = QPushButton("Fetch + analyze")
+        self.btn_recon = QPushButton("Recon scan")
+        self.spn_recon = QSpinBox(); self.spn_recon.setRange(2, 30); self.spn_recon.setValue(6)
+        self.spn_recon.setSuffix(" s")
+        self.btn_report_save = QPushButton("Save report")
         row.addWidget(QLabel("remote")); row.addWidget(self.ed_an_remote, 1)
         row.addWidget(self.btn_analyze)
+        row.addWidget(self.btn_recon); row.addWidget(self.spn_recon)
+        row.addWidget(self.btn_report_save)
         v.addLayout(row)
         self.txt_report = QPlainTextEdit(readOnly=True); self.txt_report.setFont(_mono())
         v.addWidget(self.txt_report, 1)
         return w
+
+    def _do_recon(self):
+        self.txt_report.setPlainText("scanning wifi/nrf/rf … (this takes ~%ds)" %
+                                     int(self.spn_recon.value() * 2.4))
+        self.tabs.setCurrentWidget(self.txt_report.parentWidget())
+        self.sig_recon.emit(float(self.spn_recon.value()))
+
+    def _save_report(self):
+        text = self.txt_report.toPlainText().strip()
+        if not text:
+            return
+        try:
+            import time
+            os.makedirs(CAP_DIR, exist_ok=True)
+            path = os.path.join(CAP_DIR, "report-%s.md" % time.strftime("%Y%m%d-%H%M%S"))
+            with open(path, "w") as fh:
+                fh.write(text + "\n")
+            self.statusBar().showMessage("saved " + path, 5000)
+            self.txt_report.appendPlainText("\n[saved -> %s]" % path)
+        except Exception as e:  # noqa: BLE001
+            self.statusBar().showMessage("save error: %s" % e, 5000)
 
     # ---------- worker plumbing ----------
     def _start_worker(self):
@@ -763,6 +808,7 @@ class MainWindow(QMainWindow):
         self.sig_analyze.connect(self.worker.do_analyze)
         self.sig_stream.connect(self.worker.do_stream)
         self.sig_list.connect(self.worker.do_list)
+        self.sig_recon.connect(self.worker.do_recon)
 
     def _wire(self):
         self.btn_connect.clicked.connect(self._toggle_connect)
@@ -801,6 +847,8 @@ class MainWindow(QMainWindow):
             self.sig_status.emit()
         self.btn_analyze.clicked.connect(
             lambda: self.sig_analyze.emit(self.ed_an_remote.text().strip()))
+        self.btn_recon.clicked.connect(self._do_recon)
+        self.btn_report_save.clicked.connect(self._save_report)
 
     # ---------- actions ----------
     def _toggle_connect(self):
@@ -940,7 +988,8 @@ class MainWindow(QMainWindow):
                     self.btn_put, self.btn_browse, self.btn_stream, self.btn_analyze,
                     self.btn_fb_up, self.btn_fb_refresh, self.btn_fb_dl,
                     self.btn_fb_view, self.btn_fb_del,
-                    self.btn_dict_send, self.btn_dict_deploy, self.btn_dict_tx):
+                    self.btn_dict_send, self.btn_dict_deploy, self.btn_dict_tx,
+                    self.btn_recon):
             wdg.setEnabled(on)
         # "Analyze last" works offline on already-collected events
         self.btn_stream_an.setEnabled(True)
