@@ -182,6 +182,12 @@ def analyze_wifi_stream(events):
         if cur is None or rssi > cur["rssi"]:
             nets[bssid] = {"ssid": ssid or "<hidden>", "ch": d.get("ch", "?"),
                            "enc": d.get("enc", "?"), "rssi": rssi, "bssid": bssid}
+    try:
+        import companion_dicts
+        for n in nets.values():
+            n["vendor"] = companion_dicts.lookup_oui(n["bssid"])
+    except Exception:
+        pass
     return {"sweeps": sweeps, "nets": sorted(nets.values(), key=lambda n: -n["rssi"])}
 
 
@@ -190,7 +196,8 @@ def report_wifi_stream(a):
     out.append(f"  {'RSSI':>5}  {'CH':>3}  {'ENC':<9} SSID")
     for n in a["nets"]:
         bars = _bar(n["rssi"] + 100, 70, 16)  # -100..-30 -> bar
-        out.append(f"  {n['rssi']:>5}  {n['ch']:>3}  {n['enc']:<9} {n['ssid']}  [{n['bssid']}] {bars}")
+        vend = f" {{{n['vendor']}}}" if n.get("vendor") else ""
+        out.append(f"  {n['rssi']:>5}  {n['ch']:>3}  {n['enc']:<9} {n['ssid']}  [{n['bssid']}]{vend} {bars}")
     chans = {}
     for n in a["nets"]:
         chans[n["ch"]] = chans.get(n["ch"], 0) + 1

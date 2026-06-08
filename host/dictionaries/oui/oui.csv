@@ -1,0 +1,21 @@
+prefix,vendor
+# MAC OUI (first 3 bytes) -> vendor. Seeded with common ones; import the full
+# IEEE list with: python companion_dicts.py --import-oui <oui.csv>
+246F28,Espressif
+30AEA4,Espressif
+7CDFA1,Espressif
+A020A6,Espressif
+3C6105,Espressif
+B827EB,Raspberry Pi
+B8276E,Raspberry Pi
+DCA632,Raspberry Pi
+E45F01,Raspberry Pi
+D83ADD,Raspberry Pi
+2CCF67,Raspberry Pi
+3C5AB4,Google
+F4F5E8,Google
+001A11,Google
+000C29,VMware
+005056,VMware
+50C7BF,TP-Link
+0050F2,Microsoft

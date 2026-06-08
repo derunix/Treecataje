@@ -12,6 +12,7 @@ ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "dictionaries")
 IR_DIR = os.path.join(ROOT, "ir")
 RFID_DIR = os.path.join(ROOT, "rfid")
 SUBGHZ_DIR = os.path.join(ROOT, "subghz")
+OUI_DIR = os.path.join(ROOT, "oui")
 
 # device storage directories (Bruce conventions)
 DEV_IR = "/BruceIR"
@@ -109,6 +110,55 @@ def sub_files():
     return sorted(glob.glob(os.path.join(SUBGHZ_DIR, "*.sub")))
 
 
+# ---------------- OUI (MAC vendor) ----------------
+_OUI_CACHE = None
+
+
+def load_oui():
+    """Load all oui/*.csv into a {6-hex-prefix: vendor} dict (cached). Accepts
+    our simple 'prefix,vendor' form and the IEEE 'Registry,Assignment,Org,...'
+    form (Assignment like '246F28' or '24-6F-28')."""
+    global _OUI_CACHE
+    if _OUI_CACHE is not None:
+        return _OUI_CACHE
+    table = {}
+    for path in sorted(glob.glob(os.path.join(OUI_DIR, "*.csv"))):
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            for raw in fh:
+                line = raw.strip()
+                if not line or line.startswith("#") or line.lower().startswith("prefix,"):
+                    continue
+                parts = [p.strip().strip('"') for p in line.split(",")]
+                if len(parts) >= 3 and parts[0] in ("MA-L", "MA-M", "MA-S", "IAB", "OUI"):
+                    pref, vendor = parts[1], parts[2]          # IEEE form
+                elif len(parts) >= 2:
+                    pref, vendor = parts[0], parts[1]          # simple form
+                else:
+                    continue
+                pref = pref.replace("-", "").replace(":", "").upper()[:6]
+                if len(pref) == 6 and vendor:
+                    table.setdefault(pref, vendor)
+    _OUI_CACHE = table
+    return table
+
+
+def lookup_oui(mac):
+    """Vendor for a MAC/BSSID string, or '' if unknown."""
+    h = (mac or "").replace(":", "").replace("-", "").upper()
+    return load_oui().get(h[:6], "")
+
+
+def import_oui(src):
+    """Copy an IEEE oui.csv into the dictionary and refresh the cache."""
+    import shutil
+    global _OUI_CACHE
+    os.makedirs(OUI_DIR, exist_ok=True)
+    dest = os.path.join(OUI_DIR, "ieee_" + os.path.basename(src))
+    shutil.copyfile(src, dest)
+    _OUI_CACHE = None
+    return len(load_oui())
+
+
 # ---------------- deploy targets ----------------
 def deploy_remote(category, local_path):
     """Device path to upload a dictionary file to."""
@@ -157,12 +207,16 @@ if __name__ == "__main__":
     import argparse
     ap = argparse.ArgumentParser(description="Companion dictionaries")
     ap.add_argument("--import-ir", metavar="DIR", help="bulk-import .ir files from a folder (e.g. Flipper-IRDB)")
+    ap.add_argument("--import-oui", metavar="CSV", help="import an IEEE oui.csv MAC-vendor database")
     args = ap.parse_args()
     if args.import_ir:
         imp, skip = import_ir_tree(args.import_ir)
         print(f"imported {imp} .ir files, skipped {skip} -> {IR_DIR}")
         s = summary()
         print(f"now {len(s['ir_brands'])} brands, {s['ir_signals']} signals")
+    elif args.import_oui:
+        n = import_oui(args.import_oui)
+        print(f"OUI database now {n} prefixes -> {OUI_DIR}")
     else:
         import json
         print(json.dumps(summary(), indent=2))

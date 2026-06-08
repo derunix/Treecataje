@@ -25,3 +25,6 @@ __pycache__/
 *.pyc
 host/captures/
 host/downloads/
+# bulk-imported databases (large; import locally)
+host/dictionaries/oui/ieee_*.csv
+host/dictionaries/ir/*__*.ir
