@@ -82,10 +82,37 @@ class CompanionTUI(App):
             node = tree.root.add(name)
             for cmd in cmds:
                 node.add_leaf(cmd.label, data=cmd)
+        self._add_dict_nodes(tree)
+
+    def _add_dict_nodes(self, tree) -> None:
+        """Append the host dictionaries (IR signals, RFID keys) as tree items."""
+        try:
+            import companion_dicts as cdi
+        except Exception:
+            return
+        by_brand = {}
+        for e in cdi.ir_entries():
+            by_brand.setdefault(e["brand"], []).append(e)
+        if by_brand:
+            ir = tree.root.add("IR dictionary")
+            for brand in sorted(by_brand):
+                bnode = ir.add(brand)
+                for e in by_brand[brand]:
+                    line = cdi.ir_tx_line(e)
+                    if line:
+                        bnode.add_leaf(e["name"], data=cc.Cmd(f"{brand} {e['name']}", line,
+                                                              desc="IR dictionary send"))
+        if cdi.key_files():
+            rf = tree.root.add("RFID keys")
+            rf.add_leaf("Deploy default keys.conf", data={"action": "deploy_keys"})
 
     def on_tree_node_selected(self, event: Tree.NodeSelected) -> None:
         cmd = event.node.data
         if cmd is None:  # a group header: toggle expand
+            return
+        if isinstance(cmd, dict):  # special dictionary action
+            if cmd.get("action") == "deploy_keys":
+                self.deploy_keys()
             return
         inp = self.query_one("#cmd", Input)
         if not cmd.args and cmd.kind != "danger":
@@ -189,6 +216,26 @@ class CompanionTUI(App):
             self.last_cmd_result = (r.ok, r.code, list(r.lines))
         except Exception as e:  # noqa: BLE001
             self.write_log(f"[red]error:[/red] {e}")
+
+    @work(group="dev")
+    async def deploy_keys(self) -> None:
+        if not self.dev:
+            self.write_log("[red]not connected[/red]")
+            return
+        try:
+            import companion_dicts as cdi
+            import tempfile
+            text = cdi.build_keys_conf(cdi.key_files())
+            tmp = os.path.join(tempfile.gettempdir(), "keys.conf")
+            with open(tmp, "w") as fh:
+                fh.write(text)
+            n = sum(1 for ln in text.splitlines() if not ln.startswith("//"))
+            self.write_log(f"[yellow]deploy[/yellow] {n} keys -> {cdi.DEV_RFID_KEYS} …")
+            async with self._lock:
+                out = await asyncio.to_thread(self.dev.file_put, tmp, cdi.DEV_RFID_KEYS, 512, 60)
+            self.write_log(f"[green]keys.conf deployed[/green] ok={out['ok']}")
+        except Exception as e:  # noqa: BLE001
+            self.write_log(f"[red]deploy error:[/red] {e}")
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         text = event.value.strip()

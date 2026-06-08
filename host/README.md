@@ -14,7 +14,7 @@ Current state: **Phases 0–5 done** — framed protocol over USB **and** BLE, f
 | `mcp_server.py` | MCP server (stdio) exposing the device to Claude: `device_connect/info/status/caps/busy/run/file_get/file_put/analyze/disconnect`. |
 | `companion_ble.py` | BLE GATT-central transport (bleak); same protocol as USB. |
 | `phase2_ble_test.py` / `phase3_file_test.py` | BLE handshake test / file-transfer (get+put round-trip) test. |
-| `tui.py` | Interactive TUI (Textual): connect (USB **or** BLE via `--transport ble`), status panel, a **function tree** (16 groups / ~90 commands — select to run or prefill args) + smart console (`:get`/`:put`/`:status`/cmd). Run: `python tui.py --port /dev/ttyACM0` or `--transport ble`. |
+| `tui.py` | Interactive TUI (Textual): connect (USB **or** BLE via `--transport ble`), status panel, a **function tree** (16 groups / ~90 commands + **IR dictionary** signals & **RFID keys** deploy — select to run or prefill args) + smart console (`:get`/`:put`/`:status`/cmd). Run: `python tui.py --port /dev/ttyACM0` or `--transport ble`. |
 | `tui_test.py` | Headless TUI smoke test (Textual Pilot). |
 | `companion_commands.py` | Shared catalog of ~90 device CLI commands in 16 capability groups (label, args, kind). One source of truth for the GUI buttons and TUI menu items. `build_command()` assembles the line. |
 | `companion_dicts.py` + `dictionaries/` | Curated, device-compatible reference data: IR signal DBs (`ir/*.ir`, Flipper format), MIFARE key dicts (`rfid/*.keys`), sub-GHz captures (`subghz/*.sub`). Parsed for the GUI **Dictionaries** tab and MCP (`device_dict_list`/`device_ir_send`/`device_deploy_keys`). IR sends via `ir tx`; files deploy to `/BruceIR`·`/BruceRF`·`/BruceRFID/keys.conf`. |
