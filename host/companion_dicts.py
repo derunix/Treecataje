@@ -130,6 +130,39 @@ def summary():
     return {"ir_brands": brands, "ir_signals": len(irs), "key_files": keyfiles, "subs": subs}
 
 
+def import_ir_tree(srcdir, dest=IR_DIR):
+    """Bulk-import .ir files (e.g. a cloned Flipper-IRDB) into the IR dictionary.
+    Recurses srcdir; names each copy "<ParentDir>__<file>.ir" to keep brands
+    distinct and avoid collisions. Returns (imported, skipped)."""
+    import shutil
+    os.makedirs(dest, exist_ok=True)
+    imported = skipped = 0
+    for root, _dirs, files in os.walk(srcdir):
+        for fn in files:
+            if not fn.lower().endswith(".ir"):
+                continue
+            src = os.path.join(root, fn)
+            parent = os.path.basename(root) or "IR"
+            safe = "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in parent)
+            out = os.path.join(dest, f"{safe}__{fn}")
+            try:
+                shutil.copyfile(src, out)
+                imported += 1
+            except Exception:
+                skipped += 1
+    return imported, skipped
+
+
 if __name__ == "__main__":
-    import json
-    print(json.dumps(summary(), indent=2))
+    import argparse
+    ap = argparse.ArgumentParser(description="Companion dictionaries")
+    ap.add_argument("--import-ir", metavar="DIR", help="bulk-import .ir files from a folder (e.g. Flipper-IRDB)")
+    args = ap.parse_args()
+    if args.import_ir:
+        imp, skip = import_ir_tree(args.import_ir)
+        print(f"imported {imp} .ir files, skipped {skip} -> {IR_DIR}")
+        s = summary()
+        print(f"now {len(s['ir_brands'])} brands, {s['ir_signals']} signals")
+    else:
+        import json
+        print(json.dumps(summary(), indent=2))

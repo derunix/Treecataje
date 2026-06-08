@@ -518,6 +518,11 @@ class MainWindow(QMainWindow):
     # ---------- dictionaries ----------
     def _tab_dicts(self):
         w = QWidget(); v = QVBoxLayout(w)
+        srow = QHBoxLayout()
+        self.ed_dict_search = QLineEdit()
+        self.ed_dict_search.setPlaceholderText("filter dictionaries… (brand / signal / key file)")
+        srow.addWidget(QLabel("🔍")); srow.addWidget(self.ed_dict_search, 1)
+        v.addLayout(srow)
         self.dict_tree = QTreeWidget(); self.dict_tree.setHeaderHidden(True)
         self.dict_tree.setFont(_mono())
         v.addWidget(self.dict_tree, 1)
@@ -573,6 +578,30 @@ class MainWindow(QMainWindow):
             it.setData(0, Qt.UserRole, {"kind": "sub", "path": p})
             sub_root.addChild(it)
         ir_root.setExpanded(True); rfid_root.setExpanded(True)
+
+    def _dict_filter(self, text):
+        """Hide tree items not matching the query (keep a parent if any child matches)."""
+        q = text.strip().lower()
+        root = self.dict_tree.invisibleRootItem()
+        for i in range(root.childCount()):
+            top = root.child(i)
+            top_any = False
+            for j in range(top.childCount()):
+                node = top.child(j)
+                if node.childCount():  # brand with signals
+                    child_any = False
+                    for k in range(node.childCount()):
+                        leaf = node.child(k)
+                        m = (q in leaf.text(0).lower()) or (q in node.text(0).lower())
+                        leaf.setHidden(not m)
+                        child_any = child_any or m
+                    node.setHidden(not child_any)
+                    top_any = top_any or child_any
+                else:  # direct leaf (key file / sub / placeholder)
+                    m = q in node.text(0).lower() or not q
+                    node.setHidden(not m)
+                    top_any = top_any or m
+            top.setHidden(not top_any and bool(q))
 
     def _dict_data(self):
         it = self.dict_tree.currentItem()
@@ -759,6 +788,7 @@ class MainWindow(QMainWindow):
         self.btn_dict_tx.clicked.connect(self._dict_tx)
         self.btn_dict_reload.clicked.connect(self._build_dict_tree)
         self.dict_tree.itemDoubleClicked.connect(lambda *_: self._dict_send())
+        self.ed_dict_search.textChanged.connect(self._dict_filter)
 
     def _toggle_auto(self, on):
         if on and self._connected:
