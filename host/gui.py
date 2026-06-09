@@ -33,6 +33,7 @@ import companion_commands as cc  # noqa: E402
 
 DL_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "downloads")
 CAP_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "captures")
+WORDLIST_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "dictionaries", "wordlists")
 
 
 class HistoryLineEdit(QLineEdit):
@@ -246,6 +247,37 @@ class DeviceWorker(QObject):
         except Exception as e:  # noqa: BLE001
             self.error.emit("stream error: %s" % e)
 
+    def do_crack(self, pcap, wordlist, remote):
+        """Crack a WPA handshake. If `remote` is set, fetch that path from the
+        device first; otherwise `pcap` is a local file. Emits report()."""
+        try:
+            import wpa_crack as wcm
+            local = pcap
+            if remote:
+                if self.dev is None:
+                    self.error.emit("not connected (needed to fetch the pcap)")
+                    return
+                os.makedirs(CAP_DIR, exist_ok=True)
+                local = os.path.join(CAP_DIR, os.path.basename(remote) or "hs.pcap")
+                self.log.emit("fetch %s …" % remote)
+                got = self.dev.file_get(remote, local, 512, 120)
+                self.log.emit("fetched %s B" % got.get("size"))
+            self.log.emit("cracking %s …" % os.path.basename(local))
+            res = wcm.crack_file(local, wordlist, "")
+            lines = ["WPA crack — %s" % os.path.basename(local),
+                     "wordlist: %s" % os.path.basename(wordlist), ""]
+            for c in res.get("candidates", []):
+                lines.append("  handshake: " + c)
+            lines.append("")
+            if res.get("ok"):
+                lines.append("✓ KEY FOUND: %s   (after %d tries)" % (res["key"], res.get("tried", 0)))
+            else:
+                lines.append("✗ not found: %s (tried %d)" % (res.get("error", "exhausted"),
+                                                              res.get("tried", 0)))
+            self.report.emit("\n".join(lines))
+        except Exception as e:  # noqa: BLE001
+            self.error.emit("crack error: %s" % e)
+
     def do_capture(self, kind, duration, interval):
         """Capture-to-file on the device (survives a slow/dropped link), then
         fetch + verify + analyze. Emits capture_done(meta, analysis)."""
@@ -276,6 +308,7 @@ class MainWindow(QMainWindow):
     sig_analyze = Signal(str)
     sig_stream = Signal(str, float)
     sig_capture = Signal(str, float, float)
+    sig_crack = Signal(str, str, str)  # pcap, wordlist, remote
     sig_list = Signal(str)
     sig_recon = Signal(float)
     sig_heap = Signal()
@@ -804,9 +837,45 @@ class MainWindow(QMainWindow):
         row.addWidget(self.btn_recon); row.addWidget(self.spn_recon)
         row.addWidget(self.btn_report_save)
         v.addLayout(row)
+        # WPA handshake cracking row
+        row2 = QHBoxLayout()
+        self.btn_crack_local = QPushButton("Crack WPA (local pcap)…")
+        self.btn_crack_dev = QPushButton("Crack device handshake…")
+        self.btn_wordlist = QPushButton("Wordlist…")
+        self.lbl_wordlist = QLabel("common.txt")
+        self._wordlist = os.path.join(WORDLIST_DIR, "common.txt")
+        row2.addWidget(self.btn_crack_local); row2.addWidget(self.btn_crack_dev)
+        row2.addWidget(self.btn_wordlist); row2.addWidget(self.lbl_wordlist); row2.addStretch(1)
+        v.addLayout(row2)
         self.txt_report = QPlainTextEdit(readOnly=True); self.txt_report.setFont(_mono())
         v.addWidget(self.txt_report, 1)
         return w
+
+    def _pick_wordlist(self):
+        os.makedirs(WORDLIST_DIR, exist_ok=True)
+        path, _ = QFileDialog.getOpenFileName(self, "Wordlist", WORDLIST_DIR, "Text (*.txt);;All (*)")
+        if path:
+            self._wordlist = path
+            self.lbl_wordlist.setText(os.path.basename(path))
+
+    def _crack_local(self):
+        path, _ = QFileDialog.getOpenFileName(self, "Handshake pcap", CAP_DIR,
+                                              "pcap (*.pcap *.cap);;All (*)")
+        if not path:
+            return
+        self.tabs.setCurrentWidget(self.txt_report.parentWidget())
+        self.txt_report.setPlainText("cracking %s …" % os.path.basename(path))
+        self.sig_crack.emit(path, self._wordlist, "")
+
+    def _crack_device(self):
+        from PySide6.QtWidgets import QInputDialog
+        remote, ok = QInputDialog.getText(self, "Device handshake",
+                                          "Device pcap path:", text="/BrucePCAP/handshakes/")
+        if not ok or not remote.strip():
+            return
+        self.tabs.setCurrentWidget(self.txt_report.parentWidget())
+        self.txt_report.setPlainText("fetching + cracking %s …" % remote)
+        self.sig_crack.emit("", self._wordlist, remote.strip())
 
     def _do_recon(self):
         self.txt_report.setPlainText("scanning wifi/nrf/rf … (this takes ~%ds)" %
@@ -857,6 +926,7 @@ class MainWindow(QMainWindow):
         self.sig_analyze.connect(self.worker.do_analyze)
         self.sig_stream.connect(self.worker.do_stream)
         self.sig_capture.connect(self.worker.do_capture)
+        self.sig_crack.connect(self.worker.do_crack)
         self.sig_list.connect(self.worker.do_list)
         self.sig_recon.connect(self.worker.do_recon)
         self.sig_heap.connect(self.worker.do_heap)
@@ -872,6 +942,9 @@ class MainWindow(QMainWindow):
         self.btn_stream.clicked.connect(self._do_stream)
         self.btn_capture.clicked.connect(self._do_capture)
         self.btn_stream_an.clicked.connect(self._analyze_last_stream)
+        self.btn_crack_local.clicked.connect(self._crack_local)
+        self.btn_crack_dev.clicked.connect(self._crack_device)
+        self.btn_wordlist.clicked.connect(self._pick_wordlist)
         self.btn_fb_up.clicked.connect(self._fb_up)
         self.btn_fb_refresh.clicked.connect(self._fb_refresh)
         self.fb_list.itemDoubleClicked.connect(self._fb_activate)

