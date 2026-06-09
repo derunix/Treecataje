@@ -23,7 +23,8 @@ from PySide6.QtWidgets import (
     QComboBox, QTextEdit, QPlainTextEdit, QTabWidget, QFileDialog, QSpinBox,
     QHBoxLayout, QVBoxLayout, QFormLayout, QGroupBox, QSplitter,
     QListWidget, QStackedWidget, QScrollArea, QMessageBox, QFrame, QCheckBox,
-    QTreeWidget, QTreeWidgetItem,
+    QTreeWidget, QTreeWidgetItem, QTableWidget, QTableWidgetItem, QHeaderView,
+    QAbstractItemView,
 )
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -75,6 +76,8 @@ class DeviceWorker(QObject):
     stream_done = Signal(list, list)        # start_lines, events
     capture_done = Signal(dict, str)        # cap-meta dict, host analysis text
     crack_finished = Signal()               # a crack/attack run ended (re-enable UI)
+    scan_found = Signal(list)               # [ap dict] from a WiFi scan
+    alog = Signal(str)                      # one Attack-tab log line
     listing = Signal(str, list)  # path, [(name, is_dir, size)]
     heap = Signal(int)           # free heap bytes (live telemetry)
     error = Signal(str)
@@ -327,6 +330,114 @@ class DeviceWorker(QObject):
         finally:
             self.crack_finished.emit()
 
+    # ---------- Attack tab (scan → select → act) ----------
+    def do_scan(self, secs):
+        if self.dev is None:
+            self.error.emit("not connected"); self.crack_finished.emit(); return
+        try:
+            self.alog.emit("scanning %.0fs …" % secs)
+            aps = self.dev.scan_aps(scan_secs=secs)
+            self.alog.emit("found %d APs" % len(aps))
+            self.scan_found.emit(aps)
+        except Exception as e:  # noqa: BLE001
+            self.error.emit("scan error: %s" % e)
+        finally:
+            self.crack_finished.emit()
+
+    def do_deauth(self, bssid, ch, count):
+        if self.dev is None:
+            self.error.emit("not connected"); self.crack_finished.emit(); return
+        try:
+            self.alog.emit("deauth %s ch=%d ×%d …" % (bssid, ch, count))
+            r = self.dev.deauth(bssid, "broadcast", ch, count)
+            self.alog.emit("  " + (" ".join(r.lines) or r.error or "sent"))
+        except Exception as e:  # noqa: BLE001
+            self.error.emit("deauth error: %s" % e)
+        finally:
+            self.crack_finished.emit()
+
+    def do_capture_hs(self, bssid, ch, ssid):
+        if self.dev is None:
+            self.error.emit("not connected"); self.crack_finished.emit(); return
+        import threading
+        self._crack_cancel = threading.Event()
+        try:
+            os.makedirs(CAP_DIR, exist_ok=True)
+            local = os.path.join(CAP_DIR, "hs_%s.pcap" % bssid.replace(":", ""))
+            self.alog.emit("capture handshake %s (ch=%d, deauth)…" % (ssid or bssid, ch))
+            cap = self.dev.capture_handshake(bssid=bssid, ch=ch, secs=25.0,
+                                             deauth_count=24, rounds=4, local_path=local)
+            self.alog.emit("  %d frames, %d B -> %s (sha %s)" % (
+                cap.get("samples", 0), cap.get("bytes", 0), cap.get("local"),
+                "ok" if cap.get("verified") else "?"))
+            import wpa_crack as wcm
+            t, _ = wcm.select_target(cap["local"], ssid)
+            if t:
+                self.alog.emit("  ✓ handshake: %s" % t.label())
+                wcm.export_hc22000(cap["local"], cap["local"].rsplit(".", 1)[0] + ".hc22000", ssid)
+                self._last_pcap = cap["local"]
+            else:
+                self.alog.emit("  ✗ no EAPOL captured (client idle/far — retry)")
+        except Exception as e:  # noqa: BLE001
+            self.error.emit("capture error: %s" % e)
+        finally:
+            self.crack_finished.emit()
+
+    def do_crack_pcap(self, pcap, wordlist, tool, brute):
+        """Crack an already-captured local pcap, logging to the Attack tab."""
+        import threading
+        self._crack_cancel = threading.Event()
+        try:
+            import crackers as ck, wpa_crack as wcm
+            bssid = ck.detect_bssid(pcap)
+            hc = pcap.rsplit(".", 1)[0] + ".hc22000"
+            try:
+                wcm.export_hc22000(pcap, hc)
+            except Exception:  # noqa: BLE001
+                hc = ""
+
+            def ev(e):
+                if e.get("type") == "progress":
+                    self.alog.emit("  %s tried @ %.0f/s" % (e.get("tested", "?"), e.get("rate", 0)))
+            self.alog.emit("cracking %s with %s (bssid %s)…" %
+                           (os.path.basename(pcap), tool, bssid or "?"))
+            res = ck.crack_wordlist(pcap, wordlist, bssid=bssid, tool=tool, hc22000=hc,
+                                    on_event=ev, cancel=self._crack_cancel)
+            if not res["ok"] and brute and not self._crack_cancel.is_set():
+                self.alog.emit("wordlist failed; brute 8-digit …")
+                res = ck.crack_brute(pcap, "0123456789", 8, bssid=bssid, tool=tool,
+                                     hc22000=hc, on_event=ev, cancel=self._crack_cancel)
+            if res.get("ok"):
+                self.alog.emit("✓ KEY FOUND (%s): %s" % (res.get("tool"), res["key"]))
+            elif self._crack_cancel.is_set():
+                self.alog.emit("✗ cancelled")
+            else:
+                self.alog.emit("✗ not found (%s)" % res.get("tool"))
+        except Exception as e:  # noqa: BLE001
+            self.error.emit("crack error: %s" % e)
+        finally:
+            self.crack_finished.emit()
+
+    def do_attack_target(self, ssid, bssid, ch, wordlist, tool, brute):
+        if self.dev is None:
+            self.error.emit("not connected"); self.crack_finished.emit(); return
+        import threading
+        self._crack_cancel = threading.Event()
+        try:
+            import wifi_attack
+            os.makedirs(CAP_DIR, exist_ok=True)
+            out = wifi_attack.run_attack(self.dev, ssid=ssid, bssid=bssid, ch=ch,
+                                         wordlist=wordlist, tool=tool, brute=brute,
+                                         local_dir=CAP_DIR, log=self.alog.emit,
+                                         cancel=self._crack_cancel)
+            if out.get("pcap"):
+                self._last_pcap = out["pcap"]
+            self.alog.emit(wifi_attack.format_result(out))
+        except Exception as e:  # noqa: BLE001
+            self.error.emit("attack error: %s" % e)
+        finally:
+            self.crack_finished.emit()
+
     def do_capture(self, kind, duration, interval):
         """Capture-to-file on the device (survives a slow/dropped link), then
         fetch + verify + analyze. Emits capture_done(meta, analysis)."""
@@ -359,6 +470,11 @@ class MainWindow(QMainWindow):
     sig_capture = Signal(str, float, float)
     sig_crack = Signal(str, str, str, str, bool)  # pcap, wordlist, remote, tool, brute
     sig_attack = Signal(str, str, str, bool)       # ssid, wordlist, tool, brute
+    sig_scan = Signal(float)                        # scan duration
+    sig_deauth = Signal(str, int, int)              # bssid, ch, count
+    sig_cap_hs = Signal(str, int, str)              # bssid, ch, ssid
+    sig_attack_t = Signal(str, str, int, str, str, bool)  # ssid,bssid,ch,wordlist,tool,brute
+    sig_crack_pcap = Signal(str, str, str, bool)           # pcap, wordlist, tool, brute
     sig_list = Signal(str)
     sig_recon = Signal(float)
     sig_heap = Signal()
@@ -441,6 +557,7 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self._tab_console(), "Console")
         self.tabs.addTab(self._tab_files(), "Files")
         self.tabs.addTab(self._tab_stream(), "Stream")
+        self.tabs.addTab(self._tab_attack(), "Attack")
         self.tabs.addTab(self._tab_analyze(), "Analyze")
         self.tabs.addTab(self._tab_dicts(), "Dictionaries")
         split.addWidget(self.tabs)
@@ -873,6 +990,131 @@ class MainWindow(QMainWindow):
         for x in (self.lbl_rf, self.ed_rf0, self.ed_rf1):
             x.setVisible(rf)
 
+    def _tab_attack(self):
+        import crackers as _ck
+        w = QWidget(); v = QVBoxLayout(w)
+        # scan row
+        r1 = QHBoxLayout()
+        self.btn_scan = QPushButton("⟳ Scan WiFi")
+        self.spn_scan = QSpinBox(); self.spn_scan.setRange(3, 30); self.spn_scan.setValue(6)
+        self.spn_scan.setSuffix(" s")
+        self.lbl_target = QLabel("target: —")
+        self.lbl_target.setStyleSheet("font-weight:bold;")
+        r1.addWidget(self.btn_scan); r1.addWidget(self.spn_scan)
+        r1.addSpacing(12); r1.addWidget(self.lbl_target, 1)
+        v.addLayout(r1)
+        # AP table
+        self.tbl_aps = QTableWidget(0, 5)
+        self.tbl_aps.setHorizontalHeaderLabels(["SSID", "BSSID", "ch", "RSSI", "enc"])
+        self.tbl_aps.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.tbl_aps.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.tbl_aps.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.tbl_aps.verticalHeader().setVisible(False)
+        hh = self.tbl_aps.horizontalHeader()
+        hh.setSectionResizeMode(0, QHeaderView.Stretch)
+        for c in (1, 2, 3, 4):
+            hh.setSectionResizeMode(c, QHeaderView.ResizeToContents)
+        v.addWidget(self.tbl_aps, 1)
+        # tool + wordlist row
+        r2 = QHBoxLayout()
+        self.cbo_atk_tool = QComboBox(); self.cbo_atk_tool.addItems(_ck.available_tools())
+        self.cbo_atk_wl = QComboBox()
+        for label, path, _sz in _ck.list_wordlists():
+            self.cbo_atk_wl.addItem(label, path)
+        if self.cbo_atk_wl.count() == 0:
+            self.cbo_atk_wl.addItem("(none)", "")
+        self.chk_atk_brute = QCheckBox("+brute 8d")
+        r2.addWidget(QLabel("tool")); r2.addWidget(self.cbo_atk_tool)
+        r2.addWidget(QLabel("wordlist")); r2.addWidget(self.cbo_atk_wl, 1)
+        r2.addWidget(self.chk_atk_brute)
+        v.addLayout(r2)
+        # action row
+        r3 = QHBoxLayout()
+        self.btn_atk_deauth = QPushButton("Deauth")
+        self.btn_atk_capture = QPushButton("Capture handshake")
+        self.btn_atk_full = QPushButton("⚡ Full attack")
+        self.btn_atk_crackpcap = QPushButton("Crack last pcap")
+        self.btn_atk_stop = QPushButton("Stop"); self.btn_atk_stop.setEnabled(False)
+        for b in (self.btn_atk_deauth, self.btn_atk_capture, self.btn_atk_full,
+                  self.btn_atk_crackpcap, self.btn_atk_stop):
+            r3.addWidget(b)
+        r3.addStretch(1)
+        v.addLayout(r3)
+        # log
+        self.txt_attack = QPlainTextEdit(readOnly=True); self.txt_attack.setFont(_mono())
+        self.txt_attack.setPlaceholderText("Scan → pick a network → Deauth / Capture / Full attack. "
+                                           "Authorized testing of your own networks only.")
+        v.addWidget(self.txt_attack, 1)
+        self._last_pcap = ""
+        self._aps = []
+        return w
+
+    def _selected_ap(self):
+        row = self.tbl_aps.currentRow()
+        if row < 0 or row >= len(self._aps):
+            self._alog("select a network in the table first")
+            return None
+        return self._aps[row]
+
+    def _do_scan(self):
+        self.tabs.setCurrentWidget(self.txt_attack.parentWidget())
+        self.txt_attack.appendPlainText("scanning …")
+        self._crack_busy(True)
+        self.sig_scan.emit(float(self.spn_scan.value()))
+
+    @Slot(list)
+    def _on_scan_found(self, aps):
+        self._aps = aps
+        self.tbl_aps.setRowCount(len(aps))
+        for i, ap in enumerate(aps):
+            cells = [ap["ssid"] or "<hidden>", ap["bssid"], str(ap["ch"]),
+                     str(ap["rssi"]), ap["enc"]]
+            for c, txt in enumerate(cells):
+                self.tbl_aps.setItem(i, c, QTableWidgetItem(txt))
+        if aps:
+            self.tbl_aps.selectRow(0)
+            self._on_ap_selected()
+
+    def _on_ap_selected(self):
+        ap = self._selected_ap()
+        if ap:
+            self.lbl_target.setText("target: %s [%s] ch%d %ddBm %s" % (
+                ap["ssid"] or "<hidden>", ap["bssid"], ap["ch"], ap["rssi"], ap["enc"]))
+
+    def _alog(self, msg):
+        self.txt_attack.appendPlainText(str(msg))
+
+    def _atk_deauth(self):
+        ap = self._selected_ap()
+        if not ap:
+            return
+        self._crack_busy(True)
+        self.sig_deauth.emit(ap["bssid"], ap["ch"], 24)
+
+    def _atk_capture(self):
+        ap = self._selected_ap()
+        if not ap:
+            return
+        self._crack_busy(True)
+        self.sig_cap_hs.emit(ap["bssid"], ap["ch"], ap["ssid"])
+
+    def _atk_full(self):
+        ap = self._selected_ap()
+        if not ap:
+            return
+        self._crack_busy(True)
+        self.sig_attack_t.emit(ap["ssid"], ap["bssid"], ap["ch"],
+                               self.cbo_atk_wl.currentData() or "",
+                               self.cbo_atk_tool.currentText(), self.chk_atk_brute.isChecked())
+
+    def _atk_crack_pcap(self):
+        if not self._last_pcap or not os.path.isfile(self._last_pcap):
+            self._alog("no captured pcap yet — Capture handshake first")
+            return
+        self._crack_busy(True)
+        self.sig_crack_pcap.emit(self._last_pcap, self.cbo_atk_wl.currentData() or "",
+                                 self.cbo_atk_tool.currentText(), self.chk_atk_brute.isChecked())
+
     def _tab_analyze(self):
         w = QWidget(); v = QVBoxLayout(w)
         row = QHBoxLayout()
@@ -977,8 +1219,11 @@ class MainWindow(QMainWindow):
                              self.chk_brute.isChecked())
 
     def _crack_busy(self, busy):
-        self.btn_crack_cancel.setEnabled(busy)
-        for b in (self.btn_crack_local, self.btn_crack_dev, self.btn_attack):
+        for b in (self.btn_crack_cancel, self.btn_atk_stop):
+            b.setEnabled(busy)
+        for b in (self.btn_crack_local, self.btn_crack_dev, self.btn_attack,
+                  self.btn_scan, self.btn_atk_deauth, self.btn_atk_capture,
+                  self.btn_atk_full, self.btn_atk_crackpcap):
             b.setEnabled(not busy)
 
     def _cancel_crack(self):
@@ -1023,6 +1268,8 @@ class MainWindow(QMainWindow):
         self.worker.stream_done.connect(self._on_stream_done)
         self.worker.capture_done.connect(self._on_capture_done)
         self.worker.crack_finished.connect(self._on_crack_finished)
+        self.worker.scan_found.connect(self._on_scan_found)
+        self.worker.alog.connect(self._alog)
         self.worker.listing.connect(self._on_listing)
         self.worker.heap.connect(self._on_heap)
         self.worker.error.connect(self._on_error)
@@ -1038,6 +1285,11 @@ class MainWindow(QMainWindow):
         self.sig_capture.connect(self.worker.do_capture)
         self.sig_crack.connect(self.worker.do_crack)
         self.sig_attack.connect(self.worker.do_attack)
+        self.sig_scan.connect(self.worker.do_scan)
+        self.sig_deauth.connect(self.worker.do_deauth)
+        self.sig_cap_hs.connect(self.worker.do_capture_hs)
+        self.sig_attack_t.connect(self.worker.do_attack_target)
+        self.sig_crack_pcap.connect(self.worker.do_crack_pcap)
         self.sig_list.connect(self.worker.do_list)
         self.sig_recon.connect(self.worker.do_recon)
         self.sig_heap.connect(self.worker.do_heap)
@@ -1058,6 +1310,14 @@ class MainWindow(QMainWindow):
         self.btn_attack.clicked.connect(self._do_attack)
         self.btn_crack_cancel.clicked.connect(self._cancel_crack)
         self.btn_wordlist.clicked.connect(self._pick_wordlist)
+        # Attack tab
+        self.btn_scan.clicked.connect(self._do_scan)
+        self.tbl_aps.itemSelectionChanged.connect(self._on_ap_selected)
+        self.btn_atk_deauth.clicked.connect(self._atk_deauth)
+        self.btn_atk_capture.clicked.connect(self._atk_capture)
+        self.btn_atk_full.clicked.connect(self._atk_full)
+        self.btn_atk_crackpcap.clicked.connect(self._atk_crack_pcap)
+        self.btn_atk_stop.clicked.connect(self._cancel_crack)
         self.btn_fb_up.clicked.connect(self._fb_up)
         self.btn_fb_refresh.clicked.connect(self._fb_refresh)
         self.fb_list.itemDoubleClicked.connect(self._fb_activate)

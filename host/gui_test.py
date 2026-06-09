@@ -46,7 +46,8 @@ def main():
         print(f"  [{'PASS' if cond else 'FAIL'}] {name}" + (f" — {detail}" if detail else ""))
 
     # construction
-    check("window built", win.tabs.count() == 6, f"{win.tabs.count()} tabs")
+    check("window built", win.tabs.count() == 7, f"{win.tabs.count()} tabs")
+    check("attack tab present", win.tabs.tabText(4) == "Attack", win.tabs.tabText(4))
     check("functions groups populated", win.fn_groups.count() >= 10, f"{win.fn_groups.count()} groups")
     check("dictionaries populated", win.dict_tree.topLevelItemCount() == 3,
           f"{win.dict_tree.topLevelItemCount()} categories")
@@ -106,6 +107,16 @@ def main():
             if win.fb_list.count() > 0:
                 break
         check("file browser listed /", win.fb_list.count() > 0, f"{win.fb_list.count()} entries")
+
+    # Attack tab: scan results populate the table + selection sets the target
+    aps = [{"bssid": "AA:BB:CC:DD:EE:01", "ch": 6, "ssid": "HomeNet", "rssi": -40, "enc": "wpa2"},
+           {"bssid": "AA:BB:CC:DD:EE:02", "ch": 11, "ssid": "Other", "rssi": -70, "enc": "wpa/wpa2"}]
+    win._on_scan_found(aps)
+    check("scan populated AP table", win.tbl_aps.rowCount() == 2, f"{win.tbl_aps.rowCount()} rows")
+    check("target auto-selected", "HomeNet" in win.lbl_target.text(), win.lbl_target.text())
+    sel = win._selected_ap()
+    check("selected AP resolves", sel and sel["bssid"] == "AA:BB:CC:DD:EE:01",
+          sel["bssid"] if sel else "none")
 
     # disconnect
     win.sig_disconnect.emit()

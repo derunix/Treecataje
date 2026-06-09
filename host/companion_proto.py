@@ -247,6 +247,30 @@ class Companion:
         spec += f" count={count}"
         return self.request(spec, timeout=timeout)
 
+    def scan_aps(self, scan_secs=6.0, rounds=1):
+        """Scan 2.4 GHz and return a de-duplicated AP list sorted by signal:
+        [{bssid, ch, ssid, rssi, enc}], strongest first."""
+        seen = {}
+        for _ in range(max(1, rounds)):
+            out = self.stream("wifi", duration=scan_secs)
+            for e in out["events"]:
+                if not e.startswith("wifi net") or " ssid=" not in e:
+                    continue
+                name = e[e.find(" ssid=") + 6:]
+                d = dict(t.split("=", 1) for t in e.split()
+                         if "=" in t and not t.startswith("ssid="))
+                b = d.get("bssid", "")
+                if not b:
+                    continue
+                rs = d.get("rssi", "")
+                rssi = int(rs) if rs.lstrip("-").isdigit() else -999
+                cur = seen.get(b)
+                if cur is None or rssi > cur["rssi"]:
+                    ch = d.get("ch", "")
+                    seen[b] = {"bssid": b, "ch": int(ch) if ch.isdigit() else 0,
+                               "ssid": name, "rssi": rssi, "enc": d.get("enc", "?")}
+        return sorted(seen.values(), key=lambda a: a["rssi"], reverse=True)
+
     def find_ap(self, ssid, scan_secs=4.0):
         """Scan (via the wifi stream) for an AP by SSID. Returns
         {bssid, ch, ssid, rssi} or None."""
