@@ -11,6 +11,8 @@ Smart console (single input box):
   :get <remote> [local]  download a device file (sha256-verified)
   :put <local> <remote>  upload a host file
   :ls [path]             list a device directory (alias for "ls <path>")
+  :capture <kind> [secs] log sweeps to the device's SD, then fetch+analyze
+                         (kind: telemetry|wifi|nrf|rf; survives a dropped link)
 Keys: ctrl+r refresh status · ctrl+l clear log · ctrl+q quit
 """
 import os
@@ -203,6 +205,23 @@ class CompanionTUI(App):
                 self.write_log(f"[yellow]put[/yellow] {local} -> {remote} …")
                 out = await asyncio.to_thread(self.dev.file_put, local, remote, 512, 60)
                 self.write_log(f"[green]put ok={out['ok']}[/green] sha {out['sha256'][:12]}…")
+                return
+            if text.startswith(":capture"):
+                # :capture <kind> [secs]  — log sweeps to the device, then fetch+analyze
+                parts = text.split()
+                kind = parts[1] if len(parts) > 1 else "wifi"
+                secs = float(parts[2]) if len(parts) > 2 else 12.0
+                os.makedirs(DL_DIR, exist_ok=True)
+                self.write_log(f"[yellow]capture[/yellow] {kind} -> device for {secs:.0f}s "
+                               f"[dim](survives a dropped link)[/dim] …")
+                cap = await asyncio.to_thread(self.dev.capture_fetch, kind, secs, None, "", None)
+                import companion_compute
+                vr = "[green]✓ verified[/green]" if cap.get("verified") else "[red]⚠ unverified[/red]"
+                self.write_log(f"[green]captured[/green] {cap['samples']} samples, {cap['bytes']} B "
+                               f"{vr}  [dim]{cap['path']}[/dim]")
+                rep = companion_compute.analyze_stream_file(cap["local"])
+                for line in rep.splitlines():
+                    self.write_log("  " + line)
                 return
             if text.startswith(":ls"):
                 text = "ls " + (text[3:].strip() or "/")

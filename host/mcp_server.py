@@ -304,6 +304,42 @@ def device_stream_analyze(kind: str = "wifi", duration: float = 6.0) -> str:
 
 
 @mcp.tool()
+def device_capture(kind: str = "wifi", duration: float = 15.0, interval: float = 0.0,
+                   fetch: bool = True) -> str:
+    """Capture a radio sweep TO A FILE on the device's SD, then (by default) fetch
+    and analyze it. Unlike device_stream, the device logs every sweep to storage —
+    so it survives a host disconnect and isn't throttled by a slow BLE link. Best
+    for long unattended captures.
+
+    kind: telemetry | wifi | nrf | rf (pass a band: kind="rf 433 435"). Same SPI
+          caveat as device_stream for nrf/rf (keep the device screen idle).
+    duration: seconds the capture runs on-device.
+    interval: optional sweep cadence in ms (200..10000); 0 = device default (1 Hz).
+    fetch: when True, download the file, verify its sha256, and return a
+           host-computed analysis. When False, leave it on the device and just
+           report the path/bytes/samples (fetch later with device_analyze).
+    """
+    with _lock:
+        try:
+            _ensure()
+            iv = int(interval) if interval else None
+            if fetch:
+                cap = _dev.capture_fetch(kind, duration=duration, interval=iv)
+                import companion_compute
+                analysis = companion_compute.analyze_stream_file(cap["local"])
+                vr = "verified" if cap.get("verified") else "UNVERIFIED sha256!"
+                return (f"captured {cap['kind']}: {cap['samples']} samples, "
+                        f"{cap['bytes']} B -> {cap['path']} ({vr})\n"
+                        f"local: {cap['local']}\n\n{analysis}")
+            cap = _dev.capture(kind, duration=duration, interval=iv)
+            return (f"captured {cap['kind']} on device: {cap['samples']} samples, "
+                    f"{cap['bytes']} B\npath: {cap['path']}\nsha256: {cap['sha256']}\n"
+                    f"(fetch with device_analyze remote_path=\"{cap['path']}\")")
+        except Exception as e:  # noqa: BLE001
+            return f"error: {e}"
+
+
+@mcp.tool()
 def device_set_token(token: str) -> str:
     """Set (or change) the device's companion auth token and persist it.
 

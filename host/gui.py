@@ -13,6 +13,7 @@ Run:  host/.venv/bin/python host/gui.py [--port /dev/ttyACM1]
 """
 import os
 import sys
+import time
 import argparse
 
 from PySide6.QtCore import Qt, QObject, QThread, Signal, Slot, QTimer
@@ -71,6 +72,7 @@ class DeviceWorker(QObject):
     response = Signal(str, list, int, str)  # cmd, lines, code, error
     report = Signal(str)         # analyze report text
     stream_done = Signal(list, list)        # start_lines, events
+    capture_done = Signal(dict, str)        # cap-meta dict, host analysis text
     listing = Signal(str, list)  # path, [(name, is_dir, size)]
     heap = Signal(int)           # free heap bytes (live telemetry)
     error = Signal(str)
@@ -244,6 +246,24 @@ class DeviceWorker(QObject):
         except Exception as e:  # noqa: BLE001
             self.error.emit("stream error: %s" % e)
 
+    def do_capture(self, kind, duration, interval):
+        """Capture-to-file on the device (survives a slow/dropped link), then
+        fetch + verify + analyze. Emits capture_done(meta, analysis)."""
+        if self.dev is None:
+            self.error.emit("not connected")
+            return
+        try:
+            self.log.emit("capture %s -> device for %.0fs …" % (kind, duration))
+            os.makedirs(CAP_DIR, exist_ok=True)
+            local = os.path.join(CAP_DIR, "capture-%s.txt" % time.strftime("%Y%m%d-%H%M%S"))
+            iv = int(interval) if interval else None
+            cap = self.dev.capture_fetch(kind, duration=duration, local_path=local, interval=iv)
+            import companion_compute
+            analysis = companion_compute.analyze_stream_file(cap["local"])
+            self.capture_done.emit(cap, analysis)
+        except Exception as e:  # noqa: BLE001
+            self.error.emit("capture error: %s" % e)
+
 
 class MainWindow(QMainWindow):
     # UI -> worker (queued across the thread boundary)
@@ -255,6 +275,7 @@ class MainWindow(QMainWindow):
     sig_file_put = Signal(str, str)
     sig_analyze = Signal(str)
     sig_stream = Signal(str, float)
+    sig_capture = Signal(str, float, float)
     sig_list = Signal(str)
     sig_recon = Signal(float)
     sig_heap = Signal()
@@ -715,6 +736,10 @@ class MainWindow(QMainWindow):
         self.spn_dur = QSpinBox(); self.spn_dur.setRange(1, 120); self.spn_dur.setValue(5)
         self.spn_dur.setSuffix(" s")
         self.btn_stream = QPushButton("Start stream")
+        self.btn_capture = QPushButton("Capture→device")
+        self.btn_capture.setToolTip(
+            "Log sweeps to a file on the device's SD (survives a slow/dropped link),\n"
+            "then fetch, verify sha256, and analyze. Best for long unattended captures.")
         self.btn_stream_an = QPushButton("Analyze last")
         row.addWidget(QLabel("kind")); row.addWidget(self.cbo_kind)
         row.addWidget(QLabel("dur")); row.addWidget(self.spn_dur)
@@ -726,7 +751,8 @@ class MainWindow(QMainWindow):
             row.addWidget(x); x.setVisible(False)
         self.btn_stream_save = QPushButton("Save")
         self.btn_stream_load = QPushButton("Load…")
-        row.addWidget(self.btn_stream); row.addWidget(self.btn_stream_an)
+        row.addWidget(self.btn_stream); row.addWidget(self.btn_capture)
+        row.addWidget(self.btn_stream_an)
         row.addWidget(self.btn_stream_save); row.addWidget(self.btn_stream_load)
         row.addStretch(1)
         v.addLayout(row)
@@ -817,6 +843,7 @@ class MainWindow(QMainWindow):
         self.worker.response.connect(self._on_response)
         self.worker.report.connect(self.txt_report.setPlainText)
         self.worker.stream_done.connect(self._on_stream_done)
+        self.worker.capture_done.connect(self._on_capture_done)
         self.worker.listing.connect(self._on_listing)
         self.worker.heap.connect(self._on_heap)
         self.worker.error.connect(self._on_error)
@@ -829,6 +856,7 @@ class MainWindow(QMainWindow):
         self.sig_file_put.connect(self.worker.do_file_put)
         self.sig_analyze.connect(self.worker.do_analyze)
         self.sig_stream.connect(self.worker.do_stream)
+        self.sig_capture.connect(self.worker.do_capture)
         self.sig_list.connect(self.worker.do_list)
         self.sig_recon.connect(self.worker.do_recon)
         self.sig_heap.connect(self.worker.do_heap)
@@ -842,6 +870,7 @@ class MainWindow(QMainWindow):
         self.btn_browse.clicked.connect(self._browse)
         self.btn_put.clicked.connect(self._do_put)
         self.btn_stream.clicked.connect(self._do_stream)
+        self.btn_capture.clicked.connect(self._do_capture)
         self.btn_stream_an.clicked.connect(self._analyze_last_stream)
         self.btn_fb_up.clicked.connect(self._fb_up)
         self.btn_fb_refresh.clicked.connect(self._fb_refresh)
@@ -937,6 +966,20 @@ class MainWindow(QMainWindow):
         self._stream_kind_base = self.cbo_kind.currentText()
         self.sig_stream.emit(kind, float(self.spn_dur.value()))
 
+    def _do_capture(self):
+        self.txt_stream.clear()
+        self.btn_capture.setEnabled(False)
+        self.btn_stream.setEnabled(False)
+        kind = self.cbo_kind.currentText()
+        if kind == "rf":
+            a = self.ed_rf0.text().strip() or "433.0"
+            b = self.ed_rf1.text().strip() or "434.8"
+            kind = f"rf {a} {b}"
+        self.txt_stream.appendPlainText(
+            "capturing %s to the device for %ds — this survives a dropped link…"
+            % (kind, self.spn_dur.value()))
+        self.sig_capture.emit(kind, float(self.spn_dur.value()), 0.0)
+
     def _analyze_last_stream(self):
         kind, events = self._last_stream
         if not events:
@@ -1006,10 +1049,23 @@ class MainWindow(QMainWindow):
         if self._last_stream[0] in ("wifi", "nrf", "rf") and events:
             self._analyze_last_stream()
 
+    @Slot(dict, str)
+    def _on_capture_done(self, cap, analysis):
+        self.btn_capture.setEnabled(True)
+        self.btn_stream.setEnabled(True)
+        vr = "✓ sha256 verified" if cap.get("verified") else "⚠ sha256 UNVERIFIED"
+        self.txt_stream.appendPlainText(
+            "captured %s: %d samples, %d B  [%s]\n  device: %s\n  local:  %s\n"
+            % (cap.get("kind", "?"), cap.get("samples", 0), cap.get("bytes", 0), vr,
+               cap.get("path", "?"), cap.get("local", "?")))
+        self.txt_stream.appendPlainText("──── analysis ────\n" + (analysis or "(empty)"))
+
     @Slot(str)
     def _on_error(self, msg):
         self.btn_connect.setEnabled(True)
         self.btn_stream.setEnabled(True)
+        if hasattr(self, "btn_capture"):
+            self.btn_capture.setEnabled(True)
         if not self._connected:
             self.lbl_conn.setText("● disconnected")
             self.lbl_conn.setStyleSheet("color:#c0392b;")
@@ -1021,7 +1077,8 @@ class MainWindow(QMainWindow):
     # ---------- helpers ----------
     def _set_enabled(self, on):
         for wdg in (self.ed_cmd, self.btn_send, self.btn_refresh, self.btn_get,
-                    self.btn_put, self.btn_browse, self.btn_stream, self.btn_analyze,
+                    self.btn_put, self.btn_browse, self.btn_stream, self.btn_capture,
+                    self.btn_analyze,
                     self.btn_fb_up, self.btn_fb_refresh, self.btn_fb_dl,
                     self.btn_fb_view, self.btn_fb_del,
                     self.btn_dict_send, self.btn_dict_deploy, self.btn_dict_tx,

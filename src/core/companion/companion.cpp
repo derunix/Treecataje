@@ -62,6 +62,21 @@ bool g_nrfReady = false;           // NRF24 powered up for an nrf stream
 bool g_rfReady = false;            // CC1101 powered up for an rf stream
 float g_rfStart = 433.0f, g_rfStop = 434.8f; // sub-GHz sweep band (MHz)
 
+// --- capture-to-file state ----------------------------------------------------
+// Same sweep machinery as streaming, but each data frame is written to a file on
+// storage instead of being emitted live; only a light progress EVT goes over the
+// wire. The capture survives a host disconnect (key win for slow BLE links): the
+// host later reconnects, `companion capture stop`, then `companion file get`.
+// File format matches the host save_stream(): a "# kind:" header followed by one
+// EVT-payload per line, so analyze_stream_file() parses captures unchanged.
+bool g_capturing = false;
+File g_capFile;
+String g_capPath;
+uint32_t g_capBytes = 0;
+uint32_t g_capSamples = 0;
+uint32_t g_capProgMs = 0;
+mbedtls_sha256_context g_capCtx;
+
 String buildCaps() {
     String c = "wifi,rf,ir,nrf,gpio,crypto,storage,status,gps,util,settings,power";
 #ifdef USB_as_HID
@@ -93,6 +108,28 @@ String fieldValue(const String &payload, const String &key) {
 void emit(const String &frame) {
     SerialDevice *dev = g_reply ? g_reply : serialDevice;
     if (dev) dev->println(frame);
+}
+
+// Low-level capture write: append to the file, fold into the running sha256, and
+// count bytes. Used for both the header and the data lines so the stop-RSP sha
+// covers the whole file (host cross-checks it after `file get`).
+void capWrite(const String &s) {
+    if (!g_capFile) return;
+    g_capFile.print(s); // not println(): avoid \r\n, host expects bare \n
+    mbedtls_sha256_update(&g_capCtx, (const uint8_t *)s.c_str(), s.length());
+    g_capBytes += s.length();
+}
+
+// Sink for one stream/capture data frame. The sweep emitters build just the
+// payload (everything that would follow "EVT <id> ") and call this: live streams
+// wrap it in an EVT frame to the wire; captures append it to the file.
+void emitData(const String &payload) {
+    if (g_capturing) {
+        capWrite(payload + "\n");
+        g_capSamples++;
+    } else {
+        emit("EVT " + String(g_streamId) + " " + payload);
+    }
 }
 
 String toHex(const uint8_t *d, size_t n) {
@@ -302,16 +339,15 @@ void tickWifi(uint32_t now) {
     int16_t st = WiFi.scanComplete();
     if (st == WIFI_SCAN_RUNNING) return;
     if (st >= 0) {
-        emit("EVT " + String(g_streamId) + " wifi seq=" + String(g_streamSeq) + " count=" +
-             String(st) + " ms=" + String(now));
+        emitData("wifi seq=" + String(g_streamSeq) + " count=" + String(st) + " ms=" + String(now));
         int n = st > 40 ? 40 : st; // cap frames per sweep
         for (int i = 0; i < n; i++) {
             String ssid = WiFi.SSID(i);
             ssid.replace('\r', ' ');
             ssid.replace('\n', ' '); // never break framing
-            emit("EVT " + String(g_streamId) + " wifi net ch=" + String(WiFi.channel(i)) + " rssi=" +
-                 String(WiFi.RSSI(i)) + " enc=" + String(wifiEncStr(WiFi.encryptionType(i))) +
-                 " bssid=" + WiFi.BSSIDstr(i) + " ssid=" + (ssid.length() ? ssid : String("<hidden>")));
+            emitData("wifi net ch=" + String(WiFi.channel(i)) + " rssi=" + String(WiFi.RSSI(i)) +
+                     " enc=" + String(wifiEncStr(WiFi.encryptionType(i))) +
+                     " bssid=" + WiFi.BSSIDstr(i) + " ssid=" + (ssid.length() ? ssid : String("<hidden>")));
         }
         WiFi.scanDelete();
         g_streamSeq++;
@@ -366,9 +402,9 @@ void emitNrfSweep(uint32_t now) {
             }
         }
     }
-    emit("EVT " + String(g_streamId) + " nrf seq=" + String(g_streamSeq) + " ms=" + String(now) +
-         " channels=" + String(CH) + " active_n=" + String(total) + " peak_ch=" + String(peakCh) +
-         " peak=" + String(peakHits) + " active=" + (active.length() ? active : String("none")));
+    emitData("nrf seq=" + String(g_streamSeq) + " ms=" + String(now) + " channels=" + String(CH) +
+             " active_n=" + String(total) + " peak_ch=" + String(peakCh) + " peak=" +
+             String(peakHits) + " active=" + (active.length() ? active : String("none")));
 }
 
 bool rfStreamBegin(float start, float stop) {
@@ -411,10 +447,10 @@ void emitRfSweep(uint32_t now) {
         if (r < floor_) floor_ = r;
     }
     float peakF = g_rfStart + step * peakIdx;
-    emit("EVT " + String(g_streamId) + " rf seq=" + String(g_streamSeq) + " ms=" + String(now) +
-         " f0=" + String(g_rfStart, 2) + " f1=" + String(g_rfStop, 2) + " step=" + String(step, 3) +
-         " n=" + String(N) + " peak_f=" + String(peakF, 2) + " peak=" + String(peak) +
-         " floor=" + String(floor_) + " rssi=" + rssis);
+    emitData("rf seq=" + String(g_streamSeq) + " ms=" + String(now) + " f0=" + String(g_rfStart, 2) +
+             " f1=" + String(g_rfStop, 2) + " step=" + String(step, 3) + " n=" + String(N) +
+             " peak_f=" + String(peakF, 2) + " peak=" + String(peak) + " floor=" + String(floor_) +
+             " rssi=" + rssis);
 }
 
 void streamTeardown() {
@@ -446,10 +482,18 @@ bool looksLikeFrame(const String &line) {
 void resetAuth() {
     g_authed = false;
     g_haveNonce = false;
-    streamTeardown(); // release wifi/nrf radios if a stream was active
-    g_streaming = false;
-    g_streamReply = nullptr;
-    g_radioOwner = "none";
+    // A capture-to-file deliberately SURVIVES a host disconnect (that's its whole
+    // point on slow BLE links): keep it running, just detach its progress-EVT
+    // transport so we don't write to a torn-down BLE link (emit() then falls back
+    // to USB, which is harmless). A live stream, by contrast, is torn down.
+    if (g_capturing) {
+        g_streamReply = nullptr;
+    } else {
+        streamTeardown(); // release wifi/nrf radios if a stream was active
+        g_streaming = false;
+        g_streamReply = nullptr;
+        g_radioOwner = "none";
+    }
 }
 
 void handleLine(SerialCli &cli, const String &raw, SerialDevice *reply) {
@@ -586,8 +630,10 @@ void handleLine(SerialCli &cli, const String &raw, SerialDevice *reply) {
         return;
     }
     if (payload == "companion busy") {
-        emit("RSP " + String(id) + " owner=" + String(g_radioOwner) +
-             (g_streaming ? " stream=" + g_streamKind + " id=" + String(g_streamId) : ""));
+        String act = "";
+        if (g_capturing) act = " capture=" + g_streamKind + " id=" + String(g_streamId);
+        else if (g_streaming) act = " stream=" + g_streamKind + " id=" + String(g_streamId);
+        emit("RSP " + String(id) + " owner=" + String(g_radioOwner) + act);
         emit("END " + String(id) + " 0");
         return;
     }
@@ -661,6 +707,127 @@ void handleLine(SerialCli &cli, const String &raw, SerialDevice *reply) {
         g_streaming = false;
         g_radioOwner = "none";
         emit("RSP " + String(id) + " stopped=" + String(g_streamId));
+        emit("END " + String(id) + " 0");
+        return;
+    }
+    // --- capture-to-file: same sweeps, but data is logged to SD; survives a host
+    // disconnect. Stop, then `companion file get`, then host analyze_stream_file. ---
+    if (payload.startsWith("companion capture status")) {
+        if (g_capturing) {
+            emit("RSP " + String(id) + " capturing=" + g_streamKind + " path=" + g_capPath +
+                 " samples=" + String(g_capSamples) + " bytes=" + String(g_capBytes) + " seq=" +
+                 String(g_streamSeq));
+        } else {
+            emit("RSP " + String(id) + " capturing=none");
+        }
+        emit("END " + String(id) + " 0");
+        return;
+    }
+    if (payload.startsWith("companion capture stop")) {
+        if (!g_capturing) {
+            emit("ERR " + String(id) + " 2 no capture active");
+            return;
+        }
+        uint8_t hash[32];
+        mbedtls_sha256_finish(&g_capCtx, hash);
+        mbedtls_sha256_free(&g_capCtx);
+        if (g_capFile) g_capFile.close();
+        streamTeardown();
+        g_capturing = false;
+        g_streaming = false;
+        g_radioOwner = "none";
+        emit("RSP " + String(id) + " captured path=" + g_capPath + " bytes=" + String(g_capBytes) +
+             " samples=" + String(g_capSamples) + " sha256=" + toHex(hash, 32));
+        emit("END " + String(id) + " 0");
+        return;
+    }
+    if (payload.startsWith("companion capture start")) {
+        String spec = payload.substring(String("companion capture start").length());
+        spec.trim();
+        if (spec.length() == 0) spec = "telemetry";
+        if (g_streaming || g_capturing) {
+            emit("ERR " + String(id) + " 2 capture/stream already active id=" + String(g_streamId));
+            return;
+        }
+        String kind = spec;
+        String rest = "";
+        int sp = spec.indexOf(' ');
+        if (sp > 0) {
+            kind = spec.substring(0, sp);
+            rest = spec.substring(sp + 1);
+            rest.trim();
+        }
+        if (kind != "telemetry" && kind != "wifi" && kind != "nrf" && kind != "rf") {
+            emit("ERR " + String(id) + " 3 unknown capture kind=" + kind);
+            return;
+        }
+        g_streamInterval = 1000;
+        String iv = fieldValue(spec, "interval");
+        if (iv.length()) {
+            long v = iv.toInt();
+            if (v < 200) v = 200;
+            if (v > 10000) v = 10000;
+            g_streamInterval = (uint32_t)v;
+        }
+        // Per-kind radio init (mirrors stream start; must succeed before opening
+        // the file so we don't leave an empty capture on failure).
+        if (kind == "wifi") {
+            if (WiFi.getMode() == WIFI_MODE_NULL) WiFi.mode(WIFI_STA);
+        } else if (kind == "nrf") {
+            if (!nrfStreamBegin()) {
+                emit("ERR " + String(id) + " 4 nrf init failed (radio not found?)");
+                return;
+            }
+        } else if (kind == "rf") {
+            float a = g_rfStart, b = g_rfStop;
+            int s2 = rest.indexOf(' ');
+            if (s2 > 0 && rest.charAt(0) >= '0' && rest.charAt(0) <= '9') {
+                a = rest.substring(0, s2).toFloat();
+                b = rest.substring(s2 + 1).toFloat();
+            }
+            if (!rfStreamBegin(a, b)) {
+                emit("ERR " + String(id) + " 4 rf init failed (CC1101 not found?)");
+                return;
+            }
+        }
+        // Open the capture file (default under /BruceCapture, or an explicit path=).
+        FS *fs;
+        if (!getFsStorage(fs)) {
+            streamTeardown();
+            emit("ERR " + String(id) + " 4 no fs");
+            return;
+        }
+        String path = fieldValue(spec, "path");
+        if (path.length() == 0) {
+            fs->mkdir("/BruceCapture");
+            path = "/BruceCapture/" + kind + "-" + String(millis()) + ".txt";
+        }
+        g_capFile = fs->open(path, FILE_WRITE, true);
+        if (!g_capFile) {
+            streamTeardown();
+            emit("ERR " + String(id) + " 4 cannot create " + path);
+            return;
+        }
+        g_capPath = path;
+        g_capBytes = 0;
+        g_capSamples = 0;
+        mbedtls_sha256_init(&g_capCtx);
+        mbedtls_sha256_starts(&g_capCtx, 0);
+        capWrite("# kind: " + kind + "\n");
+        capWrite("# capture: companion ms=" + String(millis()) + " interval=" +
+                 String(g_streamInterval) + "\n");
+        g_capturing = true;
+        g_streaming = true;
+        g_streamId = id;
+        g_streamSeq = 0;
+        g_streamKind = kind;
+        g_streamLastMs = 0;          // first sweep immediately
+        g_capProgMs = millis();      // first progress EVT after ~2s
+        g_streamReply = g_reply;     // progress EVTs go to the starting transport
+        g_radioOwner = "companion";
+        emit("RSP " + String(id) + " capturing=" + kind + " path=" + path + " id=" + String(id) +
+             " interval=" + String(g_streamInterval) +
+             (kind == "rf" ? " band=" + String(g_rfStart, 2) + "-" + String(g_rfStop, 2) : ""));
         emit("END " + String(id) + " 0");
         return;
     }
@@ -742,6 +909,14 @@ void tick() {
     if (!g_streaming) return;
     g_reply = g_streamReply; // EVTs go to the transport that started the stream
     uint32_t now = millis();
+    // capture: a light heartbeat over the wire (the data lines are written to the
+    // file inside the sweep emitters). Emitted before the per-kind early returns.
+    if (g_capturing && (now - g_capProgMs) >= 2000) {
+        g_capProgMs = now;
+        if (g_capFile) g_capFile.flush(); // crash-safety: don't leave data buffered
+        emit("EVT " + String(g_streamId) + " capture seq=" + String(g_streamSeq) + " samples=" +
+             String(g_capSamples) + " bytes=" + String(g_capBytes));
+    }
     // WiFi manages its own cadence (async scan): poll every tick.
     if (g_streamKind == "wifi") {
         tickWifi(now);
@@ -760,8 +935,8 @@ void tick() {
         return;
     }
     // "telemetry": live device vitals (ms / free heap).
-    emit("EVT " + String(g_streamId) + " tick seq=" + String(g_streamSeq) + " ms=" +
-         String(now) + " heap=" + String((uint32_t)ESP.getFreeHeap()));
+    emitData("tick seq=" + String(g_streamSeq) + " ms=" + String(now) + " heap=" +
+             String((uint32_t)ESP.getFreeHeap()));
     g_streamSeq++;
 }
 

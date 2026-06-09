@@ -65,9 +65,12 @@ enable/disable» (флаг `companionEnabled`) и показ/QR токена.
 
 ### 1.3 Радио-функции (стримы и захваты)
 - 🟢 стримы telemetry/wifi/nrf/rf, `interval=`.
-- ⬜ **P1 / M — Захват в файл на устройстве**: `companion capture start <kind>` пишет на
-  SD (pcap для wifi, .sub для rf, csv для nrf-спектра) → потом `file get` + host-анализ.
-  Снимает ограничение «live по BLE медленно».
+- 🟢 **Захват в файл на устройстве** (Sprint B): `companion capture start <kind> [interval=]
+  [path=]` пишет sweeps на SD (`/BruceCapture/<kind>-<ms>.txt`, формат host save_stream:
+  `# kind:` + EVT-payload построчно). `capture stop` отдаёт path/bytes/samples/sha256;
+  `capture status`; **переживает дисконнект хоста** (resetAuth не рвёт захват, только
+  отцепляет progress-EVT транспорт). Хост: `Companion.capture()/capture_fetch()`, MCP
+  `device_capture`, тест `phase9_capture_test.py`. Снимает «live по BLE медленно».
 - ⬜ **P2 / M — wifi-сниффер пакетов в стрим** (не только скан): каналы/типы фреймов,
   EAPOL-маркеры (хост докрекивает).
 - ⬜ **P2 / M — nrf addr-сниффер в стрим** (адреса/каналы, не только RPD).
@@ -110,8 +113,8 @@ enable/disable» (флаг `companionEnabled`) и показ/QR токена.
 - ⬜ **P3 / S — история команд** в консоли TUI.
 
 ### 2.3 MCP
-- 🟢 17 инструментов (connect/run/файлы/анализ/стрим/recon/словари/токен).
-- ⬜ **P2 / S — `device_capture`** (когда появится захват в файл, 1.3).
+- 🟢 18 инструментов (connect/run/файлы/анализ/стрим/recon/словари/токен).
+- 🟢 **`device_capture`** (Sprint B): захват в файл на устройстве → fetch + verify + анализ.
 - ⬜ **P3 / S — ресурсы MCP**: отдавать последние captures/отчёты как ресурсы.
 - 🟢 Правило: держать MCP в синхроне с протоколом (соблюдается).
 

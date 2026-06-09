@@ -27,14 +27,22 @@ def auth_digest(token: str, nonce: str) -> str:
     return hashlib.sha256(f"{token}:{nonce}".encode()).hexdigest()
 
 
-def _kv_from_resp(resp) -> dict:
-    """Collect all key=value tokens from a Response's RSP lines."""
+def _kv(lines) -> dict:
+    """Collect all key=value tokens from a list of RSP payload strings. The first
+    occurrence of a key wins is NOT enforced — later tokens overwrite earlier, so
+    pass the most specific line last (capture stop RSP is single-line anyway)."""
     info = {}
-    for line in resp.lines:
+    for line in lines:
         for tok in line.split():
             if "=" in tok:
                 k, v = tok.split("=", 1)
                 info[k] = v
+    return info
+
+
+def _kv_from_resp(resp) -> dict:
+    """Collect all key=value tokens from a Response's RSP lines."""
+    info = _kv(resp.lines)
     if "caps" in info:
         info["caps"] = info["caps"].split(",")
     return info
@@ -172,6 +180,60 @@ class Companion:
                     break
         self.request(f"companion stream stop {rid}", timeout=4.0)
         return {"start": r.lines, "events": events}
+
+    # --- capture-to-file (device logs sweeps to SD; survives disconnect) ---
+    def capture_start(self, kind="telemetry", path="", interval=None):
+        spec = kind
+        if interval:
+            spec += f" interval={int(interval)}"
+        if path:
+            spec += f" path={path}"
+        return self.request(f"companion capture start {spec}", timeout=6.0)
+
+    def capture_status(self, timeout=4.0):
+        return self.request("companion capture status", timeout=timeout)
+
+    def capture_stop(self, timeout=8.0):
+        return self.request("companion capture stop", timeout=timeout)
+
+    def capture(self, kind="telemetry", duration=10.0, path="", interval=None):
+        """Start a capture, let it run on-device for `duration`s (collecting any
+        progress EVTs), then stop. Returns dict(path, bytes, samples, sha256,
+        progress[]). The data stays on the device — call file_get(path) to fetch."""
+        r = self.capture_start(kind, path, interval)
+        if not r.ok:
+            raise RuntimeError(f"capture start failed: {r.error or r.lines}")
+        rid = r.id
+        meta = _kv(r.lines)
+        prog = []
+        deadline = time.time() + duration
+        for fr in self._read_frames(deadline):
+            if fr.type == "EVT" and fr.id == rid:
+                prog.append(fr.payload)
+        s = self.capture_stop()
+        if not s.ok:
+            raise RuntimeError(f"capture stop failed: {s.error or s.lines}")
+        sm = _kv(s.lines)
+        return {
+            "path": sm.get("path") or meta.get("path", ""),
+            "bytes": int(sm.get("bytes", 0)),
+            "samples": int(sm.get("samples", 0)),
+            "sha256": sm.get("sha256", ""),
+            "kind": kind,
+            "progress": prog,
+        }
+
+    def capture_fetch(self, kind="telemetry", duration=10.0, local_path=None,
+                      path="", interval=None):
+        """capture() + download the resulting file. Returns the capture dict with
+        an added 'local' path and a 'verified' bool (device sha256 vs fetched)."""
+        cap = self.capture(kind, duration, path, interval)
+        if not cap["path"]:
+            raise RuntimeError("capture produced no path")
+        got = self.file_get(cap["path"], local_path)
+        cap["local"] = got.get("path") or local_path
+        cap["verified"] = bool(cap["sha256"]) and got.get("sha256", "") == cap["sha256"]
+        return cap
 
 
 # --- transport-agnostic HELLO + challenge-response auth ---
