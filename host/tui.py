@@ -29,6 +29,8 @@ Smart console (single input box):
   :nrfkeys [secs]        sniff+decode keystrokes from selected (cleartext+MS-XOR)
   :say <freq> <text>     speak text as analog FM over CC1101 (e.g. :say 433.0 hello)
   :airtx <freq> <file>   transmit an audio file (wav/mp3/...) as analog FM
+  :voices                list TTS voices (RHVoice ru / espeak en…)
+  :voice <name>          set TTS voice for :say (auto|elena|en|en+f3…)
 Keys: ctrl+r refresh status · ctrl+l clear log · ctrl+q quit
 """
 import os
@@ -83,6 +85,7 @@ class CompanionTUI(App):
         self._table_mode = "wifi"    # what the #aps DataTable currently shows
         self._nrf_devs = []          # last NRF24 scan results
         self._nrf_target = None      # currently selected NRF24 device
+        self._tts_voice = "auto"     # TTS voice for :say (auto detects ru/en)
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -403,6 +406,20 @@ class CompanionTUI(App):
                 if res["text"]:
                     self.write_log(f"[green]── typed:[/green] {res['text']!r}")
                 return
+            if text.startswith(":voices"):
+                import audio_tx
+                self.write_log("[yellow]доступные голоса[/yellow] "
+                               f"[dim](движки: {', '.join(audio_tx.tts_engines()) or 'нет'})[/dim]")
+                for label, val in audio_tx.list_voices():
+                    mark = " [green]←[/green]" if val == self._tts_voice else ""
+                    self.write_log(f"  {val:14s} {label}{mark}")
+                self.write_log("[dim]:voice <name> — выбрать (текущий: "
+                               f"{self._tts_voice})[/dim]")
+                return
+            if text.startswith(":voice "):
+                self._tts_voice = text.split(maxsplit=1)[1].strip() or "auto"
+                self.write_log(f"[green]TTS-голос:[/green] {self._tts_voice}")
+                return
             if text.startswith(":say") or text.startswith(":airtx"):
                 # :say <freq> <text...>      — TTS -> analog FM over CC1101
                 # :airtx <freq> <file>       — transmit an audio file (wav/mp3/...)
@@ -418,8 +435,8 @@ class CompanionTUI(App):
                     self.write_log("[red]freq must be MHz, e.g. 433.0[/red]")
                     return
                 is_file = text.startswith(":airtx")
-                kw = {"source": parts[2]} if is_file else {"text": parts[2]}
-                label = ("file " + parts[2]) if is_file else repr(parts[2])
+                kw = {"source": parts[2]} if is_file else {"text": parts[2], "voice": self._tts_voice}
+                label = ("file " + parts[2]) if is_file else f"{parts[2]!r} [{self._tts_voice}]"
                 self.write_log(f"[yellow]audio tx[/yellow] {freq:g} MHz {label} "
                                f"[dim](sigma-delta → 2-FSK FM)[/dim] …")
                 res = await asyncio.to_thread(

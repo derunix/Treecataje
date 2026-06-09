@@ -30,15 +30,22 @@ import tempfile
 import wave
 
 DEFAULT_FREQ = 433.92  # MHz
-DEFAULT_DEV = 2.5      # kHz narrowband FM deviation
+DEFAULT_DEV = 4.0      # kHz FM deviation (narrowband voice; 4-4.5 = intelligible)
 DEFAULT_RATE = 8000    # Hz PCM sample rate (voice)
-DEFAULT_OSR = 16       # sigma-delta oversampling ratio (bits per sample on device)
+DEFAULT_OSR = 32       # sigma-delta oversampling ratio (higher = less quant. noise)
+
+
+# RHVoice Russian voice profiles (high quality, far better than espeak for ru)
+RHVOICE_RU = ("elena", "aleksandr", "anna", "irina", "artemiy", "pavel")
+DEFAULT_RU_VOICE = "elena"
 
 
 # --- TTS engine detection -----------------------------------------------------
 def tts_engines():
     """Return the list of available TTS backends, best first."""
     found = []
+    if shutil.which("RHVoice-test"):
+        found.append("rhvoice")  # best quality, multi-language incl. Russian
     if shutil.which("espeak-ng"):
         found.append("espeak-ng")
     if shutil.which("espeak"):
@@ -48,42 +55,99 @@ def tts_engines():
     return found
 
 
-def synth_tts(text, wav_out, voice="en", engine=None, speed=160):
-    """Render `text` to a WAV file using an available TTS engine. Returns the
-    engine used. Raises RuntimeError with install hints if none is available."""
+def list_voices():
+    """Return [(label, value)] of selectable TTS voices across the available
+    engines, for populating UI pickers. `value` is what to pass as `voice`."""
+    engines = tts_engines()
+    out = [("Auto (по тексту)", "auto")]
+    if "rhvoice" in engines:
+        vdir = "/usr/share/RHVoice/voices"
+        ru = [v for v in RHVOICE_RU if os.path.isdir(os.path.join(vdir, v))]
+        for v in (ru or list(RHVOICE_RU)):
+            out.append((f"Русский — {v} (RHVoice)", v))
+    if "espeak-ng" in engines or "espeak" in engines:
+        out += [("English — en", "en"),
+                ("English ♀ — en+f3", "en+f3"),
+                ("English ♂ — en+m3", "en+m3"),
+                ("Deutsch — de", "de"),
+                ("Français — fr", "fr"),
+                ("Español — es", "es")]
+        if "rhvoice" not in engines:
+            out.insert(1, ("Русский — ru (espeak)", "ru"))
+    return out
+
+
+def detect_voice(text):
+    """Pick a TTS voice from the script of `text`. Cyrillic -> Russian, else
+    English. Keeps Russian (and other languages) working without the caller
+    having to specify a voice."""
+    for ch in text:
+        if "Ѐ" <= ch <= "ӿ":  # Cyrillic block
+            return "ru"
+    return "en"
+
+
+def synth_tts(text, wav_out, voice="auto", engine=None, speed=160):
+    """Render `text` to a WAV file using an available TTS engine. voice='auto'
+    detects the language from the text (Cyrillic -> ru). For Russian, RHVoice is
+    strongly preferred — espeak-ng's Russian is too robotic to survive the
+    narrowband FM link. Returns "engine:voice". Raises if no engine is available."""
+    if not voice or voice == "auto":
+        voice = detect_voice(text)
     engines = tts_engines()
     if not engines:
         raise RuntimeError(
             "no TTS engine found. Install one, e.g.:\n"
-            "  sudo apt install espeak-ng        # recommended, many voices\n"
-            "  sudo apt install libttspico-utils # pico2wave\n"
+            "  sudo apt install rhvoice rhvoice-russian  # best, incl. Russian\n"
+            "  sudo apt install espeak-ng                # many voices\n"
             "or transmit an existing audio file with --file instead."
         )
-    eng = engine or engines[0]
+    is_ru = (voice == "ru") or (voice in RHVOICE_RU)
+    # prefer RHVoice for Russian (and honour an explicit RHVoice profile name)
+    if "rhvoice" in engines and (is_ru or (engine == "rhvoice")):
+        prof = voice if voice in RHVOICE_RU else DEFAULT_RU_VOICE
+        subprocess.run(["RHVoice-test", "-p", prof, "-o", wav_out],
+                       input=text.encode("utf-8"), check=True, capture_output=True)
+        return "rhvoice:" + prof
+    eng = engine or (engines[0] if engines[0] != "rhvoice" else
+                     (engines[1] if len(engines) > 1 else "rhvoice"))
+    if eng == "rhvoice":
+        prof = voice if voice in RHVOICE_RU else DEFAULT_RU_VOICE
+        subprocess.run(["RHVoice-test", "-p", prof, "-o", wav_out],
+                       input=text.encode("utf-8"), check=True, capture_output=True)
+        return "rhvoice:" + prof
     if eng in ("espeak-ng", "espeak"):
         # -w writes a WAV; -s words/min; -v voice (e.g. en, ru, en+f3)
         subprocess.run([eng, "-v", voice, "-s", str(speed), "-w", wav_out, text],
                        check=True, capture_output=True)
-    elif eng == "pico2wave":
+        return eng + ":" + voice
+    if eng == "pico2wave":
         lang = voice if "-" in voice else "en-US"
         subprocess.run(["pico2wave", "-l", lang, "-w", wav_out, text],
                        check=True, capture_output=True)
-    else:
-        raise RuntimeError(f"unknown TTS engine {eng!r}")
-    return eng
+        return "pico2wave:" + lang
+    raise RuntimeError(f"unknown TTS engine {eng!r}")
 
 
 # --- audio -> raw u8 mono PCM -------------------------------------------------
-def to_pcm_u8(src, raw_out, rate=DEFAULT_RATE):
+def to_pcm_u8(src, raw_out, rate=DEFAULT_RATE, condition=True):
     """Convert any audio file (wav/mp3/ogg/...) to headerless unsigned-8-bit mono
     PCM at `rate` Hz. Uses ffmpeg when present; falls back to stdlib wave+audioop
-    for plain WAV input. Returns the byte count written."""
+    for plain WAV input. Returns the byte count written.
+
+    With condition=True (recommended for the narrowband FM link) the audio is
+    band-limited to the ~300-3400 Hz voice band and AGC-normalised so it uses the
+    full PCM range — this maximises FM modulation depth and keeps energy inside the
+    receiver's passband, which is what makes speech intelligible over the
+    sigma-delta link (an un-normalised TTS clip modulates too shallowly)."""
     if shutil.which("ffmpeg"):
-        subprocess.run(
-            ["ffmpeg", "-y", "-i", src, "-ac", "1", "-ar", str(int(rate)),
-             "-f", "u8", "-acodec", "pcm_u8", raw_out],
-            check=True, capture_output=True,
-        )
+        cmd = ["ffmpeg", "-y", "-i", src, "-ac", "1", "-ar", str(int(rate))]
+        if condition:
+            # band-pass to the voice band, then dynamic-range normalise (AGC)
+            cmd += ["-af", "highpass=f=300,lowpass=f=3400,"
+                    "dynaudnorm=f=150:g=15:p=0.9,alimiter=limit=0.95"]
+        cmd += ["-f", "u8", "-acodec", "pcm_u8", raw_out]
+        subprocess.run(cmd, check=True, capture_output=True)
         return os.path.getsize(raw_out)
     return _wav_to_pcm_u8_stdlib(src, raw_out, rate)
 
@@ -111,7 +175,7 @@ def _wav_to_pcm_u8_stdlib(src, raw_out, rate):
 
 # --- orchestration ------------------------------------------------------------
 def transmit(dev, source=None, text=None, freq=DEFAULT_FREQ, dev_khz=DEFAULT_DEV,
-             rate=DEFAULT_RATE, osr=DEFAULT_OSR, reps=1, voice="en",
+             rate=DEFAULT_RATE, osr=DEFAULT_OSR, reps=1, voice="auto",
              engine=None, remote_path="/audio_tx.raw", keep=False, log=print):
     """Synthesise (text) or convert (source file) audio, upload it, and transmit
     it as analog FM over the CC1101. Exactly one of `source`/`text` is required.
@@ -161,7 +225,7 @@ def _main():
     ap.add_argument("--rate", type=int, default=DEFAULT_RATE, help="PCM Hz")
     ap.add_argument("--osr", type=int, default=DEFAULT_OSR)
     ap.add_argument("--reps", type=int, default=1)
-    ap.add_argument("--voice", default="en", help="TTS voice (e.g. en, ru, en+f3)")
+    ap.add_argument("--voice", default="auto", help="TTS voice (auto|en|ru|en+f3…)")
     ap.add_argument("--engine", default=None, help="force TTS engine")
     args = ap.parse_args()
 

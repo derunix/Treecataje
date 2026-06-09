@@ -1385,7 +1385,7 @@ class MainWindow(QMainWindow):
         self.spn_audio_dev = QDoubleSpinBox()
         self.spn_audio_dev.setRange(0.5, 100.0)
         self.spn_audio_dev.setDecimals(1)
-        self.spn_audio_dev.setValue(2.5)
+        self.spn_audio_dev.setValue(4.0)
         self.spn_audio_dev.setSuffix(" kHz dev")
         self.spn_audio_reps = QSpinBox()
         self.spn_audio_reps.setRange(1, 20)
@@ -1393,7 +1393,7 @@ class MainWindow(QMainWindow):
         self.spn_audio_reps.setPrefix("×")
         self.spn_audio_osr = QSpinBox()
         self.spn_audio_osr.setRange(4, 64)
-        self.spn_audio_osr.setValue(16)
+        self.spn_audio_osr.setValue(32)
         self.spn_audio_osr.setPrefix("osr ")
         self.spn_audio_rate = QSpinBox()
         self.spn_audio_rate.setRange(4000, 22050)
@@ -1414,12 +1414,18 @@ class MainWindow(QMainWindow):
         self.ed_audio_text.setPlaceholderText("text to speak, e.g. break break, radio check")
         self.cbo_audio_voice = QComboBox()
         self.cbo_audio_voice.setEditable(True)
-        self.cbo_audio_voice.addItems(["en", "ru", "en+f3", "en+m3", "de", "fr", "es"])
+        try:
+            import audio_tx
+            for label, val in audio_tx.list_voices():
+                self.cbo_audio_voice.addItem(label, val)
+        except Exception:  # noqa: BLE001
+            for v in ("auto", "ru", "en"):
+                self.cbo_audio_voice.addItem(v, v)
         self.btn_audio_say = QPushButton("🔊 Speak")
         self.btn_audio_say.clicked.connect(self._audio_say)
         tts.addWidget(QLabel("TTS"))
         tts.addWidget(self.ed_audio_text, 1)
-        tts.addWidget(QLabel("voice"))
+        tts.addWidget(QLabel("язык/голос"))
         tts.addWidget(self.cbo_audio_voice)
         tts.addWidget(self.btn_audio_say)
         lay.addLayout(tts)
@@ -1459,10 +1465,13 @@ class MainWindow(QMainWindow):
             return
         self.tabs.setCurrentWidget(self.txt_audio.parentWidget())
         self._crack_busy(True)
+        voice = self.cbo_audio_voice.currentData()
+        if not voice:  # user typed a custom value
+            voice = self.cbo_audio_voice.currentText().strip() or "auto"
         self.sig_audio_tx.emit(text, "", self.spn_audio_freq.value(),
                                self.spn_audio_dev.value(), self.spn_audio_rate.value(),
                                self.spn_audio_osr.value(), self.spn_audio_reps.value(),
-                               self.cbo_audio_voice.currentText().strip() or "en")
+                               voice)
 
     def _audio_file(self):
         path = self.ed_audio_file.text().strip()

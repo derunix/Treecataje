@@ -509,39 +509,98 @@ void doAudioTx(uint32_t id, const String &payload) {
          " osr=" + String(osr) + " reps=" + String(reps));
 
     // ---- configure CC1101 for 2-FSK with GDO0 as the async TX data line --------
-    // initRfModule("tx") brings up SPI + sets the IO-expander TX antenna switch +
-    // PA, but it leaves the part in OOK/TX. The CC1101 datasheet requires the
-    // synthesizer to be IDLE before changing FREQ/modem registers, so we drop to
-    // IDLE, reprogram for 2-FSK, re-run setMHZ() (which recalibrates), then SetTx.
+    // initRfModule("tx") brings up SPI + the GPIO antenna band switch + PA, but
+    // leaves the part in OOK/TX. The datasheet requires IDLE before changing
+    // FREQ/modem registers, so we drop to IDLE and reprogram for 2-FSK.
+    //
+    // The CC1101 shares the SPI bus with the TFT, so a register write can collide
+    // with a concurrent display transaction and silently fail (checkMISO) — when
+    // that hits setMHZ()'s FREQ2 write, the chip stays at its 0x1EC4EC power-on
+    // default (~800 MHz) and nothing radiates on the requested band. So we compute
+    // the expected FREQ bytes, program, read FREQ2 back, and retry the whole modem
+    // config until it verifies before keying TX.
     g_radioOwner = "companion";
     bool rfok = initRfModule("tx", freq);             // SPI + TX antenna band switch
-    ELECHOUSE_cc1101.setSidle();                      // IDLE before modem changes
-    ELECHOUSE_cc1101.setModulation(0);                // 2-FSK
-    ELECHOUSE_cc1101.setDeviation(dev);               // FM deviation (kHz)
-    ELECHOUSE_cc1101.setDRate((float)sr * osr / 1000.0f); // bit clock (kBaud)
-    ELECHOUSE_cc1101.setPktFormat(3);                 // async serial: GDO0 = data in
-    setMHZ(freq);                                     // rf_utils wrapper: band switch + freq + cal
-    ELECHOUSE_cc1101.setPA(12);                       // max TX power
+
+    // expected FREQ bytes for `freq` (same algorithm as ELECHOUSE setMHZ)
+    uint8_t ef2 = 0, ef1 = 0, ef0 = 0;
+    {
+        float m = freq;
+        while (true) {
+            if (m >= 26.0f) { m -= 26.0f; ef2++; }
+            else if (m >= 0.1015625f) { m -= 0.1015625f; ef1++; }
+            else if (m >= 0.00039675f) { m -= 0.00039675f; ef0++; }
+            else break;
+        }
+    }
+
+    int cfgTries = 0;
+    uint8_t f2 = 0, f1 = 0, f0 = 0;
+    for (cfgTries = 1; cfgTries <= 16; cfgTries++) {
+        ELECHOUSE_cc1101.setSidle();                  // IDLE before modem changes
+        ELECHOUSE_cc1101.setModulation(0);            // 2-FSK
+        ELECHOUSE_cc1101.setDeviation(dev);           // FM deviation (kHz)
+        ELECHOUSE_cc1101.setDRate((float)sr * osr / 1000.0f); // bit clock (kBaud)
+        ELECHOUSE_cc1101.setPktFormat(3);             // async serial: GDO0 = data in
+        setMHZ(freq);                                 // band switch + FREQ + Calibrate
+        ELECHOUSE_cc1101.setPA(12);                   // max TX power
+        delayMicroseconds(200);
+        f2 = ELECHOUSE_cc1101.SpiReadReg(0x0D);
+        f1 = ELECHOUSE_cc1101.SpiReadReg(0x0E);
+        f0 = ELECHOUSE_cc1101.SpiReadReg(0x0F);
+        if (f2 == ef2 && f1 == ef1 && f0 == ef0) break; // frequency verified
+        delay(2);                                     // let the display bus settle, retry
+    }
+
+    // If setMHZ still didn't take, write FREQ registers DIRECTLY (this path is
+    // reliable — proven by the chanwr/direct diagnostics).
+    if (!(f2 == ef2 && f1 == ef1 && f0 == ef0)) {
+        ELECHOUSE_cc1101.setSidle();
+        ELECHOUSE_cc1101.SpiWriteReg(0x0D, ef2);
+        ELECHOUSE_cc1101.SpiWriteReg(0x0E, ef1);
+        ELECHOUSE_cc1101.SpiWriteReg(0x0F, ef0);
+        delayMicroseconds(200);
+        f2 = ELECHOUSE_cc1101.SpiReadReg(0x0D);
+        f1 = ELECHOUSE_cc1101.SpiReadReg(0x0E);
+        f0 = ELECHOUSE_cc1101.SpiReadReg(0x0F);
+    }
+
+    // ---- guarantee the analog TX path (the lib setters share the flaky write
+    // path, so force these): antenna band switch GPIO -> 350-468 MHz, PA power via
+    // a direct PATABLE write, then an explicit synth calibration at the verified
+    // frequency. Without a good calibration the PLL won't lock and nothing
+    // radiates even though MARCSTATE reads TX.
+    ELECHOUSE_cc1101.setSidle();
+#if defined(CC1101_SW1_PIN) && defined(CC1101_SW0_PIN)
+    pinMode(CC1101_SW1_PIN, OUTPUT);
+    pinMode(CC1101_SW0_PIN, OUTPUT);
+    digitalWrite(CC1101_SW1_PIN, HIGH); // SW1:1 SW0:1 = 434 MHz antenna path
+    digitalWrite(CC1101_SW0_PIN, HIGH);
+#endif
+    if (freq > 430.5f) ELECHOUSE_cc1101.SpiWriteReg(CC1101_TEST0, 0x09); // VCO upper 70cm
+    ELECHOUSE_cc1101.SpiWriteReg(CC1101_PATABLE, 0xC0); // max TX power (direct)
+    ELECHOUSE_cc1101.SpiStrobe(CC1101_SCAL);          // calibrate synth at the verified freq
+    delay(2);
+
     gpio_num_t tx = (gpio_num_t)bruceConfigPins.CC1101_bus.io0;
     pinMode(tx, OUTPUT);
     gpio_set_level(tx, 0);
     ELECHOUSE_cc1101.SetTx();                          // STX from IDLE -> calibrate -> TX
 
-    // Diagnostic readback: confirm the chip is reachable over SPI and actually in
-    // TX. MARCSTATE 0x13=TX, 0x14=TX_END; PARTNUM should be 0, VERSION ~0x14/0x04.
+    // Diagnostic readback: MARCSTATE 0x13=TX; FREQ must match; pa=PATABLE[0];
+    // fscal1 nonzero/0x3F-ish after a successful calibration.
     delayMicroseconds(300);
     uint8_t marc = ELECHOUSE_cc1101.SpiReadStatus(0x35);
-    uint8_t part = ELECHOUSE_cc1101.SpiReadStatus(0x30);
     uint8_t ver = ELECHOUSE_cc1101.SpiReadStatus(0x31);
     uint8_t mdm2 = ELECHOUSE_cc1101.SpiReadReg(0x12);
-    uint8_t f2 = ELECHOUSE_cc1101.SpiReadReg(0x0D);
-    uint8_t f1 = ELECHOUSE_cc1101.SpiReadReg(0x0E);
-    uint8_t f0 = ELECHOUSE_cc1101.SpiReadReg(0x0F);
-    char dbg[120];
+    uint8_t pa = ELECHOUSE_cc1101.SpiReadReg(CC1101_PATABLE);
+    uint8_t fscal1 = ELECHOUSE_cc1101.SpiReadReg(CC1101_FSCAL1);
+    char dbg[200];
     snprintf(dbg, sizeof(dbg),
-             "audio tx radio rfok=%d cc=%d marc=0x%02X part=0x%02X ver=0x%02X "
-             "mdmcfg2=0x%02X freq=%02X%02X%02X",
-             rfok ? 1 : 0, ELECHOUSE_cc1101.getCC1101() ? 1 : 0, marc, part, ver, mdm2, f2, f1, f0);
+             "audio tx radio rfok=%d cc=%d marc=0x%02X ver=0x%02X mdmcfg2=0x%02X "
+             "freq=%02X%02X%02X want=%02X%02X%02X pa=0x%02X fscal1=0x%02X cfgtries=%d",
+             rfok ? 1 : 0, ELECHOUSE_cc1101.getCC1101() ? 1 : 0, marc, ver, mdm2,
+             f2, f1, f0, ef2, ef1, ef0, pa, fscal1, cfgTries);
     emit("RSP " + String(id) + " " + String(dbg));
 
     // ---- play: 1st-order sigma-delta @ (sr*osr) bits/s, esp_timer-paced --------
