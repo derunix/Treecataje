@@ -278,6 +278,25 @@ class DeviceWorker(QObject):
         except Exception as e:  # noqa: BLE001
             self.error.emit("crack error: %s" % e)
 
+    def do_attack(self, ssid, wordlist, mask):
+        """Full WPA attack cycle (find→deauth→capture→crack→brute) on the device."""
+        if self.dev is None:
+            self.error.emit("not connected")
+            return
+        try:
+            import wifi_attack
+            os.makedirs(CAP_DIR, exist_ok=True)
+            logs = []
+
+            def log(m):
+                logs.append(str(m))
+                self.report.emit("\n".join(logs))
+            out = wifi_attack.run_attack(self.dev, ssid=ssid, wordlist=wordlist, mask=mask,
+                                         local_dir=CAP_DIR, log=log)
+            self.report.emit("\n".join(logs) + "\n\n" + wifi_attack.format_result(out))
+        except Exception as e:  # noqa: BLE001
+            self.error.emit("attack error: %s" % e)
+
     def do_capture(self, kind, duration, interval):
         """Capture-to-file on the device (survives a slow/dropped link), then
         fetch + verify + analyze. Emits capture_done(meta, analysis)."""
@@ -309,6 +328,7 @@ class MainWindow(QMainWindow):
     sig_stream = Signal(str, float)
     sig_capture = Signal(str, float, float)
     sig_crack = Signal(str, str, str)  # pcap, wordlist, remote
+    sig_attack = Signal(str, str, str)  # ssid, wordlist, mask
     sig_list = Signal(str)
     sig_recon = Signal(float)
     sig_heap = Signal()
@@ -841,10 +861,14 @@ class MainWindow(QMainWindow):
         row2 = QHBoxLayout()
         self.btn_crack_local = QPushButton("Crack WPA (local pcap)…")
         self.btn_crack_dev = QPushButton("Crack device handshake…")
+        self.btn_attack = QPushButton("WPA attack (full cycle)…")
+        self.btn_attack.setToolTip("Find AP → deauth → capture handshake → crack by wordlist "
+                                   "→ brute.\nAuthorized testing only.")
         self.btn_wordlist = QPushButton("Wordlist…")
         self.lbl_wordlist = QLabel("common.txt")
         self._wordlist = os.path.join(WORDLIST_DIR, "common.txt")
         row2.addWidget(self.btn_crack_local); row2.addWidget(self.btn_crack_dev)
+        row2.addWidget(self.btn_attack)
         row2.addWidget(self.btn_wordlist); row2.addWidget(self.lbl_wordlist); row2.addStretch(1)
         v.addLayout(row2)
         self.txt_report = QPlainTextEdit(readOnly=True); self.txt_report.setFont(_mono())
@@ -876,6 +900,18 @@ class MainWindow(QMainWindow):
         self.tabs.setCurrentWidget(self.txt_report.parentWidget())
         self.txt_report.setPlainText("fetching + cracking %s …" % remote)
         self.sig_crack.emit("", self._wordlist, remote.strip())
+
+    def _do_attack(self):
+        from PySide6.QtWidgets import QInputDialog
+        ssid, ok = QInputDialog.getText(self, "WPA attack",
+                                        "Target SSID (authorized testing only):")
+        if not ok or not ssid.strip():
+            return
+        mask, _ = QInputDialog.getText(self, "WPA attack",
+                                       "Brute mask after wordlist (optional, e.g. ?d?d?d?d?d?d?d?d):")
+        self.tabs.setCurrentWidget(self.txt_report.parentWidget())
+        self.txt_report.setPlainText("attacking %s …" % ssid)
+        self.sig_attack.emit(ssid.strip(), self._wordlist, mask.strip())
 
     def _do_recon(self):
         self.txt_report.setPlainText("scanning wifi/nrf/rf … (this takes ~%ds)" %
@@ -927,6 +963,7 @@ class MainWindow(QMainWindow):
         self.sig_stream.connect(self.worker.do_stream)
         self.sig_capture.connect(self.worker.do_capture)
         self.sig_crack.connect(self.worker.do_crack)
+        self.sig_attack.connect(self.worker.do_attack)
         self.sig_list.connect(self.worker.do_list)
         self.sig_recon.connect(self.worker.do_recon)
         self.sig_heap.connect(self.worker.do_heap)
@@ -944,6 +981,7 @@ class MainWindow(QMainWindow):
         self.btn_stream_an.clicked.connect(self._analyze_last_stream)
         self.btn_crack_local.clicked.connect(self._crack_local)
         self.btn_crack_dev.clicked.connect(self._crack_device)
+        self.btn_attack.clicked.connect(self._do_attack)
         self.btn_wordlist.clicked.connect(self._pick_wordlist)
         self.btn_fb_up.clicked.connect(self._fb_up)
         self.btn_fb_refresh.clicked.connect(self._fb_refresh)

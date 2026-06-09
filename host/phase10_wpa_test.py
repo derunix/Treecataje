@@ -121,6 +121,49 @@ def main():
     res2 = wc.crack_file(tmp, wl2)
     ok &= check("crack fails without secret in wordlist", not res2["ok"], str(res2.get("key")))
 
+    print("\n== 3. brute-force by mask ==")
+    tmp2 = os.path.join(tempfile.gettempdir(), "wpa_pin.pcap")
+    forge(tmp2, "PinNet", "00000042", ap, sta)   # 8-digit PIN, early in ?d*8 order
+    ok &= check("mask keyspace ?d*8", wc.mask_keyspace("?d?d?d?d?d?d?d?d") == 100_000_000)
+    res3 = wc.brute_file(tmp2, "?d?d?d?d?d?d?d?d", limit=1000)  # secret at position 43
+    ok &= check("brute finds 8-digit PIN", res3["ok"] and res3["key"] == "00000042",
+                f"key={res3.get('key')!r} tried={res3.get('tried')}")
+    ok &= check("short mask yields nothing (WPA min 8)", not list(wc.mask_candidates("?d?d?d")))
+
+    print("\n== 4. full attack orchestration (mock device) ==")
+
+    class MockDev:
+        """Stand-in for a connected Companion: scan finds the AP, capture returns
+        a forged handshake pcap. Exercises wifi_attack.run_attack end-to-end."""
+        def __init__(self, pcap):
+            self._pcap = pcap
+
+        def find_ap(self, ssid, scan_secs=4.0):
+            return {"bssid": "00:11:22:33:44:55", "ch": 6, "ssid": ssid, "rssi": -42}
+
+        def deauth(self, bssid, sta="broadcast", ch=0, count=8, timeout=8.0):
+            class R: ok = True; lines = ["deauth sent"]; error = ""
+            return R()
+
+        def capture_handshake(self, bssid="", ch=0, secs=20.0, deauth_count=8,
+                              rounds=3, local_path=None):
+            import shutil
+            shutil.copy(self._pcap, local_path)
+            return {"path": "/BruceCapture/hs.pcap", "bytes": os.path.getsize(local_path),
+                    "samples": 3, "sha256": "", "local": local_path, "verified": False}
+
+    import wifi_attack
+    forged = os.path.join(tempfile.gettempdir(), "orch.pcap")
+    forge(forged, "OrchNet", "letmein99", ap, sta)
+    wl3 = os.path.join(tempfile.gettempdir(), "orch_wl.txt")
+    with open(wl3, "w") as fh:
+        fh.write("nope0000\nletmein99\nother123\n")
+    res4 = wifi_attack.run_attack(MockDev(forged), ssid="OrchNet", wordlist=wl3,
+                                  local_dir=tempfile.gettempdir(), log=lambda *_: None)
+    ok &= check("orchestration recovers key via wordlist",
+                res4["ok"] and res4["key"] == "letmein99" and res4["method"] == "wordlist",
+                f"key={res4.get('key')!r} method={res4.get('method')}")
+
     print("\n" + ("ALL PASS (wpa cracker)" if ok else "SOME FAILURES"))
     return 0 if ok else 1
 

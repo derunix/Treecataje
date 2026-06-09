@@ -15,6 +15,8 @@ Smart console (single input box):
                          (kind: telemetry|wifi|nrf|rf; survives a dropped link)
   :crack <pcap> [wl]     crack a local WPA handshake pcap by wordlist
   :crackdev <remote>[wl] fetch a device handshake pcap then crack it
+  :deauth <bssid>[ch][n] inject deauth frames at an AP (authorized use only)
+  :attack <ssid>[wl][mask] full cycle: find→deauth→capture→crack→brute
 Keys: ctrl+r refresh status · ctrl+l clear log · ctrl+q quit
 """
 import os
@@ -249,6 +251,27 @@ class CompanionTUI(App):
                     return
                 await self._crack_local(parts[1], parts[2] if len(parts) > 2 else "")
                 return
+            if text.startswith(":deauth"):
+                # :deauth <bssid> [ch] [count]
+                parts = text.split()
+                if len(parts) < 2:
+                    self.write_log("[red]usage: :deauth <bssid> [ch] [count][/red]")
+                    return
+                ch = int(parts[2]) if len(parts) > 2 else 0
+                cnt = int(parts[3]) if len(parts) > 3 else 16
+                self.write_log(f"[yellow]deauth[/yellow] {parts[1]} ch={ch} ×{cnt} …")
+                r = await asyncio.to_thread(self.dev.deauth, parts[1], "broadcast", ch, cnt)
+                self.write_log("  " + " ".join(r.lines))
+                return
+            if text.startswith(":attack"):
+                # :attack <ssid> [wordlist] [mask]  — full cycle (find→deauth→cap→crack→brute)
+                parts = text.split()
+                if len(parts) < 2:
+                    self.write_log("[red]usage: :attack <ssid> [wordlist] [mask][/red]")
+                    return
+                await self._attack(parts[1], parts[2] if len(parts) > 2 else "",
+                                   parts[3] if len(parts) > 3 else "")
+                return
             if text.startswith(":ls"):
                 text = "ls " + (text[3:].strip() or "/")
             # default: device command
@@ -301,6 +324,24 @@ class CompanionTUI(App):
             self.write_log(f"[green]✓ KEY FOUND[/green]: [b]{res['key']}[/b]  (after {res['tried']} tries)")
         else:
             self.write_log(f"[red]✗ not found[/red] {res.get('error', '')} (tried {res.get('tried', 0)})")
+
+    async def _attack(self, ssid: str, wordlist: str, mask: str) -> None:
+        import wifi_attack
+        wl = wordlist
+        if not wl and not mask:
+            wl = os.path.join(WORDLIST_DIR, "common.txt")
+        elif wl and not os.path.isfile(wl):
+            cand = os.path.join(WORDLIST_DIR, wl)
+            wl = cand if os.path.isfile(cand) else wl
+        self.write_log(f"[b]WPA attack[/b] ssid={ssid} "
+                       f"wordlist={os.path.basename(wl) if wl else '-'} mask={mask or '-'}")
+        out = await asyncio.to_thread(
+            wifi_attack.run_attack, self.dev, ssid, "", 0, wl, mask, 0, 20.0, 16, 3,
+            DL_DIR, lambda m: self.call_from_thread(self.write_log, "  " + str(m)))
+        if out.get("ok"):
+            self.write_log(f"[green]✓ KEY FOUND[/green] via {out['method']}: [b]{out['key']}[/b]")
+        else:
+            self.write_log(f"[red]✗ {out.get('error', 'failed')}[/red]")
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         text = event.value.strip()
