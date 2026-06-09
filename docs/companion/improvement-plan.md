@@ -91,6 +91,27 @@ enable/disable» (флаг `companionEnabled`) и показ/QR токена.
   `[ENC?]` с hex-дампом. Стримит `[KEY]`/`[KEY/ms]` построчно. Хост: `nrf_readkeys`
   (реконструкция typed-текста), GUI «⌨ Read keys», TUI `:nrfkeys`, MCP
   `device_nrf_readkeys`. ⚠ авторизованное тестирование своих устройств.
+- 🟢 **Аналоговая FM-передача голоса/аудио через CC1101** (`companion audio tx`): у чипа
+  нет аналогового FM-тракта, поэтому 8-бит PCM оверсэмплится в 1-битный sigma-delta-поток
+  и манипулирует GDO0 в 2-FSK — приёмник аналоговой FM интегрирует плотность бит в звук.
+  Хост `audio_tx.py`: TTS (RHVoice ru / espeak-ng en/…) или любой аудиофайл → полоса
+  300–3400 Гц + AGC → 8 кГц u8 → `companion file put` → проигрывание. Девиация ~4 кГц,
+  osr 32. Выбор языка/голоса: дропдаун GUI (вкладка «Audio TX»), TUI `:say`/`:airtx` +
+  `:voices`/`:voice`, MCP `device_audio_tx`. **Проверено в эфире** на 433.0 МГц → Baofeng
+  UV-3R: чистый тон, разборчивая речь (en+ru). Ключевой фикс: библиотечные `setMHZ`/`setPA`
+  на общей с TFT шине SPI срывались (частота оставалась в дефолте 0x1EC4EC ≈ 800 МГц) —
+  частота пишется с verify+retry и fallback на прямую запись FREQ, PATABLE/SCAL форсируются.
+  ⚠ передавать только на разрешённых частотах, на свои радиостанции.
+- 🟡 **Запись по несущей (RX)** (`companion audio rx`): живой аналоговый приём на CC1101
+  невозможен; вместо него — взвод по несущей (carrier-sense на пине GDO2, **GPIO без SPI**,
+  чтобы циклы не гонялись с дисплеем за шину → иначе `xTaskPriorityDisinherit`/краш),
+  запись демод-потока GDO0 в файл, остановка по пропаже несущей. Хост `audio_tx.record` →
+  забор файла → `decode_capture` (НЧ-FIR + децимация → WAV). **Захват и декод разделены:**
+  сырьё в `host/captures/*.bin`+`.json`, передекод офлайн (`decode_file`/`--decode`) с
+  настройкой `cutoff/hpf/outrate`. GUI «📻 Receive», TUI `:rx`, MCP `device_audio_rx`.
+  Собрано и компилируется; **на железе ещё не валидировано** (USB-CDC uConsole расшатался
+  после краша первой версии — нужна перепрошивка с чистого старта). Возможна подстройка
+  порога carrier-sense (AGCCTRL1) и RX-полосы.
 - ⬜ **P2 / M — nrf addr-сниффер в стрим** (адреса/каналы, не только RPD).
 - ⬜ **P2 / S — rf RAW-rx стрим** (декодированные кадры / сырые тайминги по событию GDO0).
 - ⬜ **P3 / S — параметры стрима** (rf шаг/число бинов, nrf диапазон каналов).
@@ -115,8 +136,12 @@ enable/disable» (флаг `companionEnabled`) и показ/QR токена.
 ## 2. Host roadmap
 
 ### 2.1 GUI (PySide6)
-- 🟢 Functions/Console/Files(браузер)/Stream/Analyze/Dictionaries, история, авто-рефреш,
-  live-heap, recon, capture save/load.
+- 🟢 Functions/Console/Files(браузер)/Stream/Attack/NRF24/**Audio TX**/Analyze/Dictionaries,
+  история, авто-рефреш, live-heap, recon, capture save/load.
+- 🟢 **Вкладка «Audio TX»**: TTS-поле + дропдаун язык/голос (RHVoice ru / espeak en/…),
+  выбор аудиофайла, freq/dev/reps/osr/rate, кнопки 🔊 Speak / 📡 Transmit file /
+  📻 Receive (запись по несущей), лог. `audio_tx.py` (TTS, конвертация, sigma-delta TX,
+  carrier-record + офлайн-декод).
 - ⬜ **P1 / M — Живой стрим в реальном времени**: worker отдаёт события инкрементально
   (сейчас collect-then-return) → live-обновление спектра/таблицы во время скана.
 - ⬜ **P2 / S — Избранное / быстрые действия** (закреплённые команды и IR-сигналы).
@@ -125,7 +150,8 @@ enable/disable» (флаг `companionEnabled`) и показ/QR токена.
 - ⬜ **P3 / S — Тема/масштаб** под экран uConsole (компактный режим).
 
 ### 2.2 TUI (Textual)
-- 🟢 дерево функций + словари, USB/BLE.
+- 🟢 дерево функций + словари, USB/BLE; `:say`/`:airtx` (аналоговая FM-передача),
+  `:rx` (запись по несущей), `:voices`/`:voice` (выбор TTS-голоса).
 - ⬜ **P2 / S — файловый браузер** (как в GUI).
 - ⬜ **P2 / S — панель стримов/спарклайны** в TUI.
 - ⬜ **P3 / S — история команд** в консоли TUI.
@@ -135,6 +161,9 @@ enable/disable» (флаг `companionEnabled`) и показ/QR токена.
 - 🟢 **`device_capture`** (Sprint B): захват в файл на устройстве → fetch + verify + анализ.
 - 🟢 **`wpa_crack`/`device_handshakes`/`device_crack_handshake`**: WPA-крек на хосте.
 - 🟢 **`device_deauth`/`device_wifi_attack`/`list_crackers`**: deauth + полный цикл.
+- 🟢 **`device_nrf_scan/jam/jam_presets/hijack/readkeys`**: NRF24 скан/глушение/инжект/снифер.
+- 🟢 **`device_audio_tx`/`device_audio_rx`**: аналоговая FM-передача TTS/аудио и запись по
+  несущей через CC1101 (выбор языка/голоса, офлайн-декод сырых захватов).
 - 🟢 **Реальные крекеры** (`crackers.py`): GUI/TUI/MCP/оркестрация используют
   **aircrack-ng** (приоритет, стабилен на CPU) / hashcat (если есть рабочий OpenCL —
   на uConsole PoCL падает) с автодетектом, fallback на pure-Python. Автопоиск словарей

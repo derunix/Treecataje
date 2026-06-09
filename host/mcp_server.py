@@ -741,6 +741,33 @@ def device_audio_tx(text: str = "", file: str = "", freq: float = 433.92,
 
 
 @mcp.tool()
+def device_audio_rx(freq: float = 433.92, wait: int = 30, secs: int = 20,
+                    rssi: int = -90, rate: int = 100000, out: str = "") -> str:
+    """Carrier-triggered analog audio capture over the CC1101 (~433/443 MHz).
+    Live FM monitoring isn't possible on this chip, so this arms on a carrier:
+    it waits up to `wait`s for RSSI>=`rssi` dBm on `freq`, records the demodulated
+    GDO0 bitstream at `rate` Hz until the carrier drops (or `secs`), then fetches
+    it and reconstructs a WAV (saved to `out` if given, under /tmp otherwise).
+    Returns the saved WAV path + capture stats, or a no-carrier note.
+
+    LEGAL: receive only on frequencies you are permitted to monitor."""
+    with _lock:
+        try:
+            _ensure()
+            import audio_tx
+            lines = []
+            res = audio_tx.record(_dev, freq=freq, wait=wait, secs=secs, rssi=rssi,
+                                  rate=rate, out_wav=(out or None), play=False,
+                                  log=lines.append)
+            if not res:
+                return "no carrier captured\n" + "\n".join(lines)
+            return (f"captured {res['secs']:.1f}s @ {freq:g} MHz -> {res['wav']} "
+                    f"({res['rate']} Hz)\n" + "\n".join(lines))
+        except Exception as e:  # noqa: BLE001
+            return f"error: {e}"
+
+
+@mcp.tool()
 def device_disconnect() -> str:
     """Close the transport to the device."""
     global _dev

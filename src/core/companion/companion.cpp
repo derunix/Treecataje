@@ -634,6 +634,160 @@ void doAudioTx(uint32_t id, const String &payload) {
     emit("END " + String(id) + " 0");
 }
 
+// ---- carrier-triggered analog audio capture over CC1101 ----------------------
+// The CC1101 has no analog FM-demod output, so live monitoring isn't possible.
+// Instead we arm on a carrier (RSSI threshold) and capture the demodulated 1-bit
+// data-slicer stream from GDO0 at a high sample rate — the inverse of the TX
+// sigma-delta trick. The host low-passes the bit density back into audio. Capture
+// stops when the carrier drops for `hold` ms or `secs` elapses. The packed bits
+// are written to a file; the host fetches and reconstructs a WAV.
+//   companion audio rx freq=<MHz> [wait=<s>] [secs=<s>] [rssi=<dBm>] [rate=<Hz>]
+//                       [hold=<ms>] [path=<file>]
+void doAudioRx(uint32_t id, const String &payload) {
+    if (g_streaming || g_capturing) {
+        emit("ERR " + String(id) + " 2 BUSY");
+        return;
+    }
+    float freq = fieldValue(payload, "freq").toFloat();
+    if (freq < 280 || freq > 928) freq = 433.92f;
+    uint32_t waitS = fieldValue(payload, "wait").toInt();
+    if (waitS == 0) waitS = 30;
+    if (waitS > 300) waitS = 300;
+    uint32_t secs = fieldValue(payload, "secs").toInt();
+    if (secs == 0) secs = 20;
+    if (secs > 60) secs = 60;
+    int rssiThr = fieldValue(payload, "rssi").toInt();
+    if (rssiThr == 0) rssiThr = -90; // dBm carrier threshold
+    uint32_t rate = fieldValue(payload, "rate").toInt();
+    if (rate < 20000 || rate > 200000) rate = 100000; // GDO0 sample rate
+    uint32_t holdMs = fieldValue(payload, "hold").toInt();
+    if (holdMs == 0) holdMs = 400;
+    String path = fieldValue(payload, "path");
+    if (!path.length()) path = "/audio_rx.bin";
+    (void)rssiThr; // carrier sensing is done via the GDO2 pin, not SPI (see below)
+
+    // ---- configure RX: 2-FSK, wide BW, async serial (GDO0 = demod data out) ----
+    g_radioOwner = "companion";
+    initRfModule("rx", freq);
+    // reliable frequency program (same flaky-setMHZ workaround as TX)
+    uint8_t ef2 = 0, ef1 = 0, ef0 = 0;
+    {
+        float m = freq;
+        while (true) {
+            if (m >= 26.0f) { m -= 26.0f; ef2++; }
+            else if (m >= 0.1015625f) { m -= 0.1015625f; ef1++; }
+            else if (m >= 0.00039675f) { m -= 0.00039675f; ef0++; }
+            else break;
+        }
+    }
+    ELECHOUSE_cc1101.setSidle();
+    ELECHOUSE_cc1101.setModulation(0);   // 2-FSK
+    ELECHOUSE_cc1101.setRxBW(135);       // wide enough for NBFM voice + drift
+    ELECHOUSE_cc1101.setPktFormat(3);    // async serial: GDO0 = demodulated data
+    ELECHOUSE_cc1101.SpiWriteReg(0x0D, ef2);
+    ELECHOUSE_cc1101.SpiWriteReg(0x0E, ef1);
+    ELECHOUSE_cc1101.SpiWriteReg(0x0F, ef0);
+#if defined(CC1101_SW1_PIN) && defined(CC1101_SW0_PIN)
+    pinMode(CC1101_SW1_PIN, OUTPUT);
+    pinMode(CC1101_SW0_PIN, OUTPUT);
+    digitalWrite(CC1101_SW1_PIN, HIGH);
+    digitalWrite(CC1101_SW0_PIN, HIGH);
+#endif
+    if (freq > 430.5f) ELECHOUSE_cc1101.SpiWriteReg(CC1101_TEST0, 0x09);
+    // Carrier sense on GDO2 so the wait/record loops poll a GPIO instead of doing
+    // SPI RSSI reads — a long SPI poll loop here races the display task on the
+    // shared bus and crashes (xTaskPriorityDisinherit). AGCCTRL1: absolute
+    // carrier-sense threshold (rel disabled) so CS stays asserted while a carrier
+    // is present; IOCFG2 routes carrier-sense to the GDO2 pin.
+    ELECHOUSE_cc1101.SpiWriteReg(0x1B, 0x04); // AGCCTRL1: abs CS thr +4 dB, rel off
+    ELECHOUSE_cc1101.SpiWriteReg(0x00, 0x0E); // IOCFG2: GDO2 = carrier sense
+    ELECHOUSE_cc1101.SpiStrobe(CC1101_SCAL);
+    delay(2);
+    gpio_num_t rx = (gpio_num_t)bruceConfigPins.CC1101_bus.io0;
+    gpio_num_t cs = (gpio_num_t)bruceConfigPins.CC1101_bus.io2; // carrier sense
+    pinMode(rx, INPUT);
+    pinMode(cs, INPUT);
+    ELECHOUSE_cc1101.SetRx();
+
+    uint8_t f2 = ELECHOUSE_cc1101.SpiReadReg(0x0D);
+    emit("RSP " + String(id) + " audio rx armed freq=" + String(freq, 3) +
+         " rate=" + String(rate) + " wait=" + String(waitS) +
+         "s secs=" + String(secs) + "s freqok=" + String(f2 == ef2 ? 1 : 0));
+
+    // ---- wait for a carrier (poll the GDO2 carrier-sense GPIO, no SPI) --------
+    int64_t t0 = esp_timer_get_time();
+    int64_t waitUntil = t0 + (int64_t)waitS * 1000000;
+    bool carrier = false;
+    while (esp_timer_get_time() < waitUntil) {
+        if (gpio_get_level(cs)) { carrier = true; break; }
+        delay(10);
+    }
+    if (!carrier) {
+        deinitRfModule();
+        g_radioOwner = "none";
+        emit("RSP " + String(id) + " audio rx no carrier");
+        emit("END " + String(id) + " 0");
+        return;
+    }
+
+    // ---- capture GDO0 at `rate` until carrier drops for `hold` ms or `secs` ----
+    size_t maxBits = (size_t)secs * rate;
+    size_t maxBytes = (maxBits + 7) / 8;
+    uint8_t *buf = (uint8_t *)(psramFound() ? ps_malloc(maxBytes) : malloc(maxBytes));
+    if (!buf) {
+        deinitRfModule();
+        g_radioOwner = "none";
+        emit("ERR " + String(id) + " 4 oom " + String((uint32_t)maxBytes));
+        return;
+    }
+    const double usPerSamp = 1000000.0 / (double)rate;
+    int64_t cap0 = esp_timer_get_time();
+    size_t nbits = 0;
+    uint8_t cur = 0;
+    int bitpos = 0;
+    int64_t lastCarrierMs = (int64_t)(esp_timer_get_time() / 1000);
+    uint32_t sinceCs = 0;
+    while (nbits < maxBits) {
+        int b = gpio_get_level(rx);
+        cur = (uint8_t)((cur << 1) | (b & 1));
+        if (++bitpos == 8) {
+            buf[nbits >> 3] = cur;
+            bitpos = 0;
+            cur = 0;
+        }
+        nbits++;
+        // every ~5 ms, check carrier-sense (GDO2 GPIO, no SPI) for end-of-tx
+        if (++sinceCs >= rate / 200) {
+            sinceCs = 0;
+            int64_t nowMs = (int64_t)(esp_timer_get_time() / 1000);
+            if (gpio_get_level(cs)) lastCarrierMs = nowMs;
+            else if (nowMs - lastCarrierMs >= (int64_t)holdMs) break; // carrier gone
+        }
+        int64_t deadline = cap0 + (int64_t)(nbits * usPerSamp);
+        while (esp_timer_get_time() < deadline) { /* pace the sampler */ }
+    }
+    if (bitpos) buf[nbits >> 3] = (uint8_t)(cur << (8 - bitpos)); // flush partial byte
+    uint32_t capMs = (uint32_t)((esp_timer_get_time() - cap0) / 1000);
+
+    deinitRfModule();
+    g_radioOwner = "none";
+
+    // ---- write packed bits to a file -----------------------------------------
+    FS *fs;
+    size_t wbytes = (nbits + 7) / 8;
+    if (getFsStorage(fs)) {
+        File f = fs->open(path, FILE_WRITE, true);
+        if (f) {
+            f.write(buf, wbytes);
+            f.close();
+        }
+    }
+    free(buf);
+    emit("RSP " + String(id) + " audio rx done path=" + path + " bits=" + String((uint32_t)nbits) +
+         " rate=" + String(rate) + " bytes=" + String((uint32_t)wbytes) + " ms=" + String(capMs));
+    emit("END " + String(id) + " 0");
+}
+
 // ---- real radio stream kinds (wifi / nrf) -------------------------------------
 
 const char *wifiEncStr(int enc) {
@@ -1249,6 +1403,12 @@ void handleLine(SerialCli &cli, const String &raw, SerialDevice *reply) {
     //   companion audio tx path=<file> [freq=MHz] [dev=kHz] [rate=Hz] [osr=N] [reps=N]
     if (payload.startsWith("companion audio tx")) {
         doAudioTx(id, payload);
+        return;
+    }
+    // Carrier-triggered analog audio capture (arms on RSSI, records GDO0 demod).
+    //   companion audio rx freq=<MHz> [wait=<s>] [secs=<s>] [rssi=<dBm>] [rate=<Hz>]
+    if (payload.startsWith("companion audio rx")) {
+        doAudioRx(id, payload);
         return;
     }
 #if !defined(LITE_VERSION)

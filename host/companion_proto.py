@@ -325,6 +325,18 @@ class Companion:
         est = (nbytes / max(1, rate)) * reps
         return self.audio_tx_play(remote_path, freq, dev, rate, osr, reps, est_secs=est)
 
+    def audio_rx(self, freq=433.92, wait=30, secs=20, rssi=-90, rate=100000,
+                 hold=400, remote_path="/audio_rx.bin", timeout=None):
+        """Arm a carrier-triggered analog capture: the device waits up to `wait`s
+        for a carrier (RSSI >= `rssi` dBm) on `freq`, then records the demodulated
+        GDO0 bitstream at `rate` Hz until the carrier drops for `hold` ms or `secs`
+        elapses, writing packed bits to `remote_path`. Returns the RSP Response
+        (parse bits/rate/path; 'no carrier' if none seen). Use audio_tx.record()
+        for the full fetch+reconstruct+play flow."""
+        spec = (f"companion audio rx freq={freq:g} wait={int(wait)} secs={int(secs)} "
+                f"rssi={int(rssi)} rate={int(rate)} hold={int(hold)} path={remote_path}")
+        return self.request(spec, timeout=timeout or (wait + secs + 15))
+
     # --- WiFi handshake attack primitives -------------------------------------
     def deauth(self, bssid, sta="broadcast", ch=0, count=8, timeout=8.0):
         """Inject deauth frames to knock a client off `bssid` (forces a re-auth →

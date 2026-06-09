@@ -83,6 +83,16 @@ top-level: `ls`(`dir`), `cat`(`type`) 🟡, `md5`, `crc32`, `rm`(`del`), `md`(`m
 | `companion file put <path> size=… sha256=…` | загрузка файла (stop-and-wait `ACK`) | 🟡 |
 | `companion stream start <kind>` | старт потоковой задачи, события `EVT … ` | 🟡/🔴 |
 | `companion stream stop <id>` | остановка потоковой задачи | 🟢 |
+| `companion wifi deauth bssid=… [sta=…] [ch=N] [count=N]` | инжект deauth (форсит рукопожатие) | 🔴 |
+| `companion audio tx path=… [freq=MHz] [dev=kHz] [rate=Hz] [osr=N] [reps=N]` | аналоговая FM-передача голоса/аудио через CC1101 (sigma-delta → 2-FSK); PCM грузится через `companion file put` | 🔴 реализовано |
+| `companion audio rx freq=MHz [wait=s] [secs=s] [rssi=dBm] [rate=Hz] [hold=ms] [path=…]` | запись по несущей: ждёт carrier (GDO2 carrier-sense), пишет демод-поток GDO0, сохраняет в файл для офлайн-декода на хосте | 🔴 реализовано (не валидировано на железе) |
+
+### `companion audio tx` / `audio rx` — аналоговое радио на CC1101
+
+У CC1101 нет аналогового FM-тракта, поэтому голос синтезируется программно:
+- **TX:** хост (`host/audio_tx.py`) переводит TTS/аудио в 8-бит mono PCM (полоса 300–3400 Гц + AGC), грузит файл, прошивка оверсэмплит в 1-битный sigma-delta-поток и манипулирует GDO0 в 2-FSK — приёмник аналоговой FM (рация) интегрирует плотность бит обратно в звук. Узкополосная девиация ~4 кГц. **Важно:** библиотечные `setMHZ`/`setPA` на общей с дисплеем шине SPI нестабильны — частота пишется с verify+retry и fallback на прямую запись FREQ, мощность PATABLE и калибровка SCAL форсируются напрямую.
+- **RX:** живой приём невозможен; вместо него запись по несущей. Детектор несущей вынесен на пин GDO2 (carrier-sense GPIO), чтобы циклы не делали SPI (иначе гонка с дисплеем → `xTaskPriorityDisinherit`). Сырой 1-битный захват → хост (`audio_tx.record`/`decode_file`): НЧ-фильтр + децимация → WAV. Захват и декод **разделены** — сырьё хранится в `host/captures/*.bin`+`.json`, передекодируется офлайн с другими параметрами.
+- **TTS-движки:** RHVoice (русский, голоса elena/aleksandr/…), espeak-ng (en/de/fr/…). Выбор языка/голоса: дропдаун в GUI, `:voices`/`:voice` в TUI, `voice=auto` детектит кириллицу→ru.
 
 ### Допустимые `<kind>` для `companion stream start`
 

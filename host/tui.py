@@ -29,6 +29,7 @@ Smart console (single input box):
   :nrfkeys [secs]        sniff+decode keystrokes from selected (cleartext+MS-XOR)
   :say <freq> <text>     speak text as analog FM over CC1101 (e.g. :say 433.0 hello)
   :airtx <freq> <file>   transmit an audio file (wav/mp3/...) as analog FM
+  :rx <freq> [secs]      receive: arm on carrier, record, reconstruct + play
   :voices                list TTS voices (RHVoice ru / espeak en…)
   :voice <name>          set TTS voice for :say (auto|elena|en|en+f3…)
 Keys: ctrl+r refresh status · ctrl+l clear log · ctrl+q quit
@@ -419,6 +420,30 @@ class CompanionTUI(App):
             if text.startswith(":voice "):
                 self._tts_voice = text.split(maxsplit=1)[1].strip() or "auto"
                 self.write_log(f"[green]TTS-голос:[/green] {self._tts_voice}")
+                return
+            if text.startswith(":rx"):
+                # :rx <freq> [secs] [wait] — arm on carrier, record, play
+                import audio_tx
+                parts = text.split()
+                if len(parts) < 2:
+                    self.write_log("[red]usage: :rx <freqMHz> [secs] [wait][/red]")
+                    return
+                try:
+                    freq = float(parts[1])
+                except ValueError:
+                    self.write_log("[red]freq must be MHz, e.g. 433.0[/red]")
+                    return
+                secs = int(parts[2]) if len(parts) > 2 else 20
+                wait = int(parts[3]) if len(parts) > 3 else 30
+                self.write_log(f"[yellow]audio rx[/yellow] {freq:g} MHz — жду несущую "
+                               f"(до {wait}с), запись до {secs}с …")
+                res = await asyncio.to_thread(
+                    lambda: audio_tx.record(self.dev, freq=freq, secs=secs, wait=wait,
+                                            play=True, log=lambda m: self.call_from_thread(self.write_log, "  " + m)))
+                if res:
+                    self.write_log(f"[green]── записано:[/green] {res['secs']:.1f}s → {res['wav']}")
+                else:
+                    self.write_log("  [dim]несущая не появилась[/dim]")
                 return
             if text.startswith(":say") or text.startswith(":airtx"):
                 # :say <freq> <text...>      — TTS -> analog FM over CC1101

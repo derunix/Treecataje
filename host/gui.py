@@ -550,6 +550,27 @@ class DeviceWorker(QObject):
         finally:
             self.crack_finished.emit()
 
+    def do_audio_rx(self, freq, secs, wait, rssi):
+        """Carrier-triggered analog capture over CC1101 -> reconstruct WAV -> play.
+        Logs to the Audio tab via audlog."""
+        if self.dev is None:
+            self.error.emit("not connected"); self.crack_finished.emit(); return
+        try:
+            import audio_tx
+            self.audlog.emit("audio rx %g MHz — waiting for carrier (<=%ds), record <=%ds …"
+                             % (freq, wait, secs))
+            res = audio_tx.record(self.dev, freq=freq, secs=int(secs), wait=int(wait),
+                                  rssi=int(rssi), play=True,
+                                  log=lambda m: self.audlog.emit("  " + m))
+            if res:
+                self.audlog.emit("recorded %.1fs -> %s" % (res["secs"], res["wav"]))
+            else:
+                self.audlog.emit("no carrier captured")
+        except Exception as e:  # noqa: BLE001
+            self.error.emit("audio rx error: %s" % e)
+        finally:
+            self.crack_finished.emit()
+
     def do_capture(self, kind, duration, interval):
         """Capture-to-file on the device (survives a slow/dropped link), then
         fetch + verify + analyze. Emits capture_done(meta, analysis)."""
@@ -594,6 +615,7 @@ class MainWindow(QMainWindow):
     sig_nrf_hijack = Signal(str, int, str, str, str)        # addr,ch,action,arg,proto
     sig_nrf_readkeys = Signal(str, int, int)                # addr,ch,secs
     sig_audio_tx = Signal(str, str, float, float, int, int, int, str)  # text,file,freq,dev,rate,osr,reps,voice
+    sig_audio_rx = Signal(float, int, int, int)                        # freq,secs,wait,rssi
     sig_list = Signal(str)
     sig_recon = Signal(float)
     sig_heap = Signal()
@@ -1444,12 +1466,42 @@ class MainWindow(QMainWindow):
         fl.addWidget(self.btn_audio_file)
         lay.addLayout(fl)
 
+        # receive (carrier-triggered record) row
+        rxl = QHBoxLayout()
+        self.spn_audio_rx_secs = QSpinBox()
+        self.spn_audio_rx_secs.setRange(1, 60)
+        self.spn_audio_rx_secs.setValue(20)
+        self.spn_audio_rx_secs.setSuffix(" s rec")
+        self.spn_audio_rx_wait = QSpinBox()
+        self.spn_audio_rx_wait.setRange(1, 300)
+        self.spn_audio_rx_wait.setValue(30)
+        self.spn_audio_rx_wait.setSuffix(" s wait")
+        self.spn_audio_rx_rssi = QSpinBox()
+        self.spn_audio_rx_rssi.setRange(-120, -20)
+        self.spn_audio_rx_rssi.setValue(-90)
+        self.spn_audio_rx_rssi.setSuffix(" dBm")
+        self.btn_audio_rx = QPushButton("📻 Receive (carrier-triggered)")
+        self.btn_audio_rx.clicked.connect(self._audio_rx)
+        rxl.addWidget(QLabel("RX"))
+        rxl.addWidget(self.btn_audio_rx)
+        rxl.addWidget(self.spn_audio_rx_secs)
+        rxl.addWidget(self.spn_audio_rx_wait)
+        rxl.addWidget(self.spn_audio_rx_rssi)
+        rxl.addStretch(1)
+        lay.addLayout(rxl)
+
         self.txt_audio = QPlainTextEdit(readOnly=True)
         lay.addWidget(self.txt_audio, 1)
         lay.addWidget(QLabel(
-            "<i>Transmit only on frequencies you are permitted to use, to your own "
-            "radios. RF transmission is regulated.</i>"))
+            "<i>Transmit/receive only on frequencies you are permitted to use, to "
+            "your own radios. RF is regulated. RX uses the same Freq field.</i>"))
         return w
+
+    def _audio_rx(self):
+        self.tabs.setCurrentWidget(self.txt_audio.parentWidget())
+        self._crack_busy(True)
+        self.sig_audio_rx.emit(self.spn_audio_freq.value(), self.spn_audio_rx_secs.value(),
+                               self.spn_audio_rx_wait.value(), self.spn_audio_rx_rssi.value())
 
     def _audio_browse(self):
         path, _ = QFileDialog.getOpenFileName(
@@ -1594,7 +1646,8 @@ class MainWindow(QMainWindow):
                   self.btn_scan, self.btn_atk_deauth, self.btn_atk_capture,
                   self.btn_atk_full, self.btn_atk_crackpcap,
                   self.btn_nrf_scan, self.btn_nrf_jamch, self.btn_nrf_preset, self.btn_nrf_hijack,
-                  self.btn_nrf_readkeys, self.btn_audio_say, self.btn_audio_file):
+                  self.btn_nrf_readkeys, self.btn_audio_say, self.btn_audio_file,
+                  self.btn_audio_rx):
             b.setEnabled(not busy)
 
     def _cancel_crack(self):
@@ -1671,6 +1724,7 @@ class MainWindow(QMainWindow):
         self.sig_nrf_hijack.connect(self.worker.do_nrf_hijack)
         self.sig_nrf_readkeys.connect(self.worker.do_nrf_readkeys)
         self.sig_audio_tx.connect(self.worker.do_audio_tx)
+        self.sig_audio_rx.connect(self.worker.do_audio_rx)
         self.sig_list.connect(self.worker.do_list)
         self.sig_recon.connect(self.worker.do_recon)
         self.sig_heap.connect(self.worker.do_heap)
