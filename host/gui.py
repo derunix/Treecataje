@@ -494,6 +494,25 @@ class DeviceWorker(QObject):
         finally:
             self.crack_finished.emit()
 
+    def do_nrf_readkeys(self, addr, ch, secs):
+        if self.dev is None:
+            self.error.emit("not connected"); self.crack_finished.emit(); return
+        try:
+            self.nlog.emit("readkeys %s ch=%d for %ds (decoding HID; cleartext + MS-XOR)…"
+                           % (addr, ch, secs))
+            res = self.dev.nrf_readkeys(addr, ch, secs)
+            for ln in res["lines"]:
+                if ln.startswith("[KEY") or ln.startswith("[ENC") or ln.startswith("[NRF"):
+                    self.nlog.emit("  " + ln)
+            if res["text"]:
+                self.nlog.emit("── typed: %r" % res["text"])
+            elif not any(l.startswith("[KEY") for l in res["lines"]):
+                self.nlog.emit("  (no decodable keystrokes — device idle, encrypted, or wrong ch)")
+        except Exception as e:  # noqa: BLE001
+            self.error.emit("nrf readkeys error: %s" % e)
+        finally:
+            self.crack_finished.emit()
+
     def do_nrf_hijack(self, addr, ch, action, arg, proto):
         if self.dev is None:
             self.error.emit("not connected"); self.crack_finished.emit(); return
@@ -549,6 +568,7 @@ class MainWindow(QMainWindow):
     sig_nrf_jam_sweep = Signal(int, int, int, int, int)     # start,stop,step,dwell,noise
     sig_nrf_preset = Signal(str)                            # jam preset name
     sig_nrf_hijack = Signal(str, int, str, str, str)        # addr,ch,action,arg,proto
+    sig_nrf_readkeys = Signal(str, int, int)                # addr,ch,secs
     sig_list = Signal(str)
     sig_recon = Signal(float)
     sig_heap = Signal()
@@ -1240,9 +1260,15 @@ class MainWindow(QMainWindow):
         r3 = QHBoxLayout()
         self.btn_nrf_jamch = QPushButton("Jam channel 3s")
         self.btn_nrf_hijack = QPushButton("⚡ Hijack")
+        self.btn_nrf_readkeys = QPushButton("⌨ Read keys")
+        self.btn_nrf_readkeys.setToolTip("Sniff + decode HID keystrokes from the selected device "
+                                         "(cleartext + Microsoft XOR; encrypted flagged).")
+        self.spn_nrf_secs = QSpinBox(); self.spn_nrf_secs.setRange(3, 120); self.spn_nrf_secs.setValue(15)
+        self.spn_nrf_secs.setSuffix(" s")
         self.btn_nrf_stop = QPushButton("Stop"); self.btn_nrf_stop.setEnabled(False)
-        for b in (self.btn_nrf_jamch, self.btn_nrf_hijack, self.btn_nrf_stop):
+        for b in (self.btn_nrf_jamch, self.btn_nrf_hijack, self.btn_nrf_readkeys):
             r3.addWidget(b)
+        r3.addWidget(self.spn_nrf_secs); r3.addWidget(self.btn_nrf_stop)
         r3.addStretch(1)
         v.addLayout(r3)
         self.txt_nrf = QPlainTextEdit(readOnly=True); self.txt_nrf.setFont(_mono())
@@ -1303,6 +1329,13 @@ class MainWindow(QMainWindow):
         self.sig_nrf_hijack.emit(d["addr"], self.spn_nrf_ch.value(),
                                  self.cbo_nrf_action.currentText(),
                                  self.ed_nrf_arg.text().strip(), self.cbo_nrf_proto.currentText())
+
+    def _nrf_readkeys(self):
+        d = self._selected_nrf()
+        if not d:
+            return
+        self._crack_busy(True)
+        self.sig_nrf_readkeys.emit(d["addr"], self.spn_nrf_ch.value(), self.spn_nrf_secs.value())
 
     def _tab_analyze(self):
         w = QWidget(); v = QVBoxLayout(w)
@@ -1413,7 +1446,8 @@ class MainWindow(QMainWindow):
         for b in (self.btn_crack_local, self.btn_crack_dev, self.btn_attack,
                   self.btn_scan, self.btn_atk_deauth, self.btn_atk_capture,
                   self.btn_atk_full, self.btn_atk_crackpcap,
-                  self.btn_nrf_scan, self.btn_nrf_jamch, self.btn_nrf_preset, self.btn_nrf_hijack):
+                  self.btn_nrf_scan, self.btn_nrf_jamch, self.btn_nrf_preset, self.btn_nrf_hijack,
+                  self.btn_nrf_readkeys):
             b.setEnabled(not busy)
 
     def _cancel_crack(self):
@@ -1487,6 +1521,7 @@ class MainWindow(QMainWindow):
         self.sig_nrf_jam_sweep.connect(self.worker.do_nrf_jam_sweep)
         self.sig_nrf_preset.connect(self.worker.do_nrf_jam_preset)
         self.sig_nrf_hijack.connect(self.worker.do_nrf_hijack)
+        self.sig_nrf_readkeys.connect(self.worker.do_nrf_readkeys)
         self.sig_list.connect(self.worker.do_list)
         self.sig_recon.connect(self.worker.do_recon)
         self.sig_heap.connect(self.worker.do_heap)
@@ -1521,6 +1556,7 @@ class MainWindow(QMainWindow):
         self.btn_nrf_jamch.clicked.connect(self._nrf_jam_ch)
         self.btn_nrf_preset.clicked.connect(self._nrf_preset)
         self.btn_nrf_hijack.clicked.connect(self._nrf_hijack)
+        self.btn_nrf_readkeys.clicked.connect(self._nrf_readkeys)
         self.btn_nrf_stop.clicked.connect(self._cancel_crack)
         self.btn_fb_up.clicked.connect(self._fb_up)
         self.btn_fb_refresh.clicked.connect(self._fb_refresh)

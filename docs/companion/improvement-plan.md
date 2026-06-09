@@ -85,6 +85,12 @@ enable/disable» (флаг `companionEnabled`) и показ/QR токена.
   **NRF24** (скан→таблица→Jam/Hijack), TUI `:nrfscan/:nrfjam/:nrfsweep/:nrfhijack`
   (та же DataTable в режиме nrf), MCP `device_nrf_scan/jam/hijack`.
   ⚠ только авторизованное тестирование своих устройств.
+- 🟢 **NRF24 readkeys** (снифер нажатий): `nrf readkeys <addr> <ch> [secs]` — пин RX на
+  цель, декод HID-scancode→символ (полный shift-aware маппинг), для Microsoft 2.4GHz
+  XOR-расшифровка с адресом (best-effort, пробуются оффсеты), Logitech-AES помечается
+  `[ENC?]` с hex-дампом. Стримит `[KEY]`/`[KEY/ms]` построчно. Хост: `nrf_readkeys`
+  (реконструкция typed-текста), GUI «⌨ Read keys», TUI `:nrfkeys`, MCP
+  `device_nrf_readkeys`. ⚠ авторизованное тестирование своих устройств.
 - ⬜ **P2 / M — nrf addr-сниффер в стрим** (адреса/каналы, не только RPD).
 - ⬜ **P2 / S — rf RAW-rx стрим** (декодированные кадры / сырые тайминги по событию GDO0).
 - ⬜ **P3 / S — параметры стрима** (rf шаг/число бинов, nrf диапазон каналов).

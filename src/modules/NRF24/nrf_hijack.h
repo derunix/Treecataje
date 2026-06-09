@@ -18,3 +18,7 @@ void nrf_sweep_jam(int startCh, int stopCh, int step, int dwellMs, bool noise);
 // action = type|run|calc|cmd|jam, logitech selects the Unifying protocol.
 bool nrf_hijack_inject(const String &addrHex, int channel, const String &action,
                        const String &arg, bool logitech = true);
+
+// Headless keystroke sniffer: decode HID keys from a target address+channel
+// (cleartext + Microsoft XOR; encrypted payloads flagged). Streams [KEY] lines.
+bool nrf_readkeys(const String &addrHex, int channel, int secs);

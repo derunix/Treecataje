@@ -66,6 +66,15 @@ static uint32_t nrfHijackCallback(cmd *c) {
     return nrf_hijack_inject(addr, channel, action, arg, logitech) ? true : false;
 }
 
+// nrf readkeys <addr> <channel> [secs]
+static uint32_t nrfReadKeysCallback(cmd *c) {
+    Command cmd(c);
+    String addr = cmd.getArgument(0).getValue();
+    int channel = cmd.getArgument(1).getValue().toInt();
+    int secs = cmd.getArgument(2).getValue().toInt();
+    return nrf_readkeys(addr, channel, secs) ? true : false;
+}
+
 void createNrfCommands(SimpleCLI *cli) {
     Command nrf = cli->addCompositeCmd("nrf");
     Command scan = nrf.addCommand("scan", nrfScanCallback);
@@ -84,4 +93,9 @@ void createNrfCommands(SimpleCLI *cli) {
     hijack.addPosArg("action", "jam");
     hijack.addPosArg("arg", "");
     hijack.addPosArg("proto", "logi");
+
+    Command readkeys = nrf.addCommand("readkeys", nrfReadKeysCallback);
+    readkeys.addPosArg("addr", "0000000000");
+    readkeys.addPosArg("channel", "1");
+    readkeys.addPosArg("secs", "10");
 }

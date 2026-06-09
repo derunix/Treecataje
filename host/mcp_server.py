@@ -688,6 +688,29 @@ def device_nrf_hijack(addr: str, channel: int, action: str = "calc", arg: str = 
 
 
 @mcp.tool()
+def device_nrf_readkeys(addr: str, channel: int, secs: int = 15) -> str:
+    """Sniff and decode HID keystrokes from a target NRF24 device. Cleartext HID
+    keyboards are decoded directly; Microsoft 2.4GHz keyboards are XOR-decrypted
+    with the address (best-effort); encrypted (Logitech AES Unifying) payloads are
+    flagged. addr: 10 hex chars (from device_nrf_scan). Returns decoded keys + the
+    reconstructed typed text.
+
+    LEGAL: authorized testing of your own devices only."""
+    with _lock:
+        try:
+            _ensure()
+            res = _dev.nrf_readkeys(addr, channel, secs)
+            body = "\n".join("  " + l for l in res["lines"]
+                             if l.startswith(("[KEY", "[ENC", "[NRF")))
+            out = body or "(no output)"
+            if res["text"]:
+                out += "\n\ntyped: " + repr(res["text"])
+            return out
+        except Exception as e:  # noqa: BLE001
+            return f"error: {e}"
+
+
+@mcp.tool()
 def device_disconnect() -> str:
     """Close the transport to the device."""
     global _dev
