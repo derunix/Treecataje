@@ -27,6 +27,8 @@ Smart console (single input box):
   :nrfsweep              sweep-jam NRF channels 1-80
   :nrfhijack <action>[arg][proto] HID inject (calc|cmd|type|run|jam) on selected
   :nrfkeys [secs]        sniff+decode keystrokes from selected (cleartext+MS-XOR)
+  :say <freq> <text>     speak text as analog FM over CC1101 (e.g. :say 433.0 hello)
+  :airtx <freq> <file>   transmit an audio file (wav/mp3/...) as analog FM
 Keys: ctrl+r refresh status · ctrl+l clear log · ctrl+q quit
 """
 import os
@@ -400,6 +402,30 @@ class CompanionTUI(App):
                         self.write_log("  " + ln)
                 if res["text"]:
                     self.write_log(f"[green]── typed:[/green] {res['text']!r}")
+                return
+            if text.startswith(":say") or text.startswith(":airtx"):
+                # :say <freq> <text...>      — TTS -> analog FM over CC1101
+                # :airtx <freq> <file>       — transmit an audio file (wav/mp3/...)
+                import audio_tx
+                parts = text.split(maxsplit=2)
+                if len(parts) < 3:
+                    self.write_log("[red]usage: :say <freqMHz> <text>  |  "
+                                   ":airtx <freqMHz> <file>[/red]")
+                    return
+                try:
+                    freq = float(parts[1])
+                except ValueError:
+                    self.write_log("[red]freq must be MHz, e.g. 433.0[/red]")
+                    return
+                is_file = text.startswith(":airtx")
+                kw = {"source": parts[2]} if is_file else {"text": parts[2]}
+                label = ("file " + parts[2]) if is_file else repr(parts[2])
+                self.write_log(f"[yellow]audio tx[/yellow] {freq:g} MHz {label} "
+                               f"[dim](sigma-delta → 2-FSK FM)[/dim] …")
+                res = await asyncio.to_thread(
+                    lambda: audio_tx.transmit(self.dev, freq=freq, log=lambda m: None, **kw))
+                tag = "[green]done[/green]" if res["ok"] else "[red]failed[/red]"
+                self.write_log(f"  {tag}: {res['bytes']}B {res['secs']:.1f}s on air")
                 return
             if text.startswith(":nrfhijack"):
                 # :nrfhijack <action> [arg] [proto] — on the selected NRF device

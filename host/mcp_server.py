@@ -711,6 +711,36 @@ def device_nrf_readkeys(addr: str, channel: int, secs: int = 15) -> str:
 
 
 @mcp.tool()
+def device_audio_tx(text: str = "", file: str = "", freq: float = 433.92,
+                    dev: float = 2.5, rate: int = 8000, osr: int = 16,
+                    reps: int = 1, voice: str = "en") -> str:
+    """Transmit analog FM voice/audio over the CC1101 (~433/443 MHz) for analog
+    radios/walkie-talkies. Provide either text= (rendered via TTS) or file= (any
+    audio file: wav/mp3/ogg). The host converts to 8-bit mono PCM and the device
+    plays it as a sigma-delta -> 2-FSK FM stream. freq MHz, dev = FM deviation kHz
+    (2.5 = narrowband), rate = PCM Hz, osr = oversampling, reps = repeat count,
+    voice = TTS voice (e.g. en, ru, en+f3).
+
+    LEGAL: transmit only on frequencies you are permitted to use, to your own
+    radios. RF transmission is regulated."""
+    if not text and not file:
+        return "error: provide text= (TTS) or file= (audio file)"
+    with _lock:
+        try:
+            _ensure()
+            import audio_tx
+            lines = []
+            res = audio_tx.transmit(_dev, source=file or None, text=text or None,
+                                    freq=freq, dev_khz=dev, rate=rate, osr=osr,
+                                    reps=reps, voice=voice, log=lines.append)
+            head = (f"audio tx {'ok' if res['ok'] else 'FAILED'}: "
+                    f"{res['bytes']}B {res['secs']:.1f}s x{reps} @ {freq:g}MHz")
+            return head + "\n" + "\n".join(lines)
+        except Exception as e:  # noqa: BLE001
+            return f"error: {e}"
+
+
+@mcp.tool()
 def device_disconnect() -> str:
     """Close the transport to the device."""
     global _dev

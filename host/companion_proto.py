@@ -304,6 +304,27 @@ class Companion:
         a = arg if arg else "x"
         return self.request(f"nrf hijack {addr} {ch} {action} {a} {proto}", timeout=timeout)
 
+    # --- analog FM audio / TTS TX over CC1101 ---------------------------------
+    def audio_tx_play(self, remote_path, freq=433.92, dev=2.5, rate=8000,
+                      osr=16, reps=1, est_secs=10.0):
+        """Transmit an already-uploaded raw u8 mono PCM file as analog FM over the
+        CC1101 (sigma-delta -> 2-FSK). Blocks on-device ~ bytes/rate*reps seconds."""
+        spec = (f"companion audio tx path={remote_path} freq={freq:g} "
+                f"dev={dev:g} rate={int(rate)} osr={int(osr)} reps={int(reps)}")
+        return self.request(spec, timeout=est_secs + 15)
+
+    def audio_tx(self, local_pcm, freq=433.92, dev=2.5, rate=8000, osr=16,
+                 reps=1, remote_path="/audio_tx.raw"):
+        """Upload a raw u8 mono PCM file and transmit it as analog FM. For TTS /
+        WAV / MP3 sources use audio_tx.transmit() which converts then calls this."""
+        import os
+        nbytes = os.path.getsize(local_pcm)
+        put = self.file_put(local_pcm, remote_path, timeout=max(30.0, nbytes / 800.0))
+        if put.get("ok") is False:
+            raise RuntimeError(f"upload failed: {put.get('lines') or put}")
+        est = (nbytes / max(1, rate)) * reps
+        return self.audio_tx_play(remote_path, freq, dev, rate, osr, reps, est_secs=est)
+
     # --- WiFi handshake attack primitives -------------------------------------
     def deauth(self, bssid, sta="broadcast", ch=0, count=8, timeout=8.0):
         """Inject deauth frames to knock a client off `bssid` (forces a re-auth →

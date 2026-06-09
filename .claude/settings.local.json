@@ -31,7 +31,14 @@
       "Bash(python3 -c \"import json,sys; d=json.load\\(sys.stdin\\); print\\(d.get\\(''name''\\), d.get\\(''version''\\)\\)\")",
       "WebFetch(domain:api.github.com)",
       "Bash(C:/Users/derun/.platformio/penv/Scripts/python.exe -c \":*)",
-      "Bash(python3 -c \"import json,sys; d=json.load\\(sys.stdin\\); print\\(''name:'', d.get\\(''name''\\), ''version:'', d.get\\(''version''\\)\\)\")"
+      "Bash(python3 -c \"import json,sys; d=json.load\\(sys.stdin\\); print\\(''name:'', d.get\\(''name''\\), ''version:'', d.get\\(''version''\\)\\)\")",
+      "Read(//home/derunix/.platformio/penv/bin/**)",
+      "Bash(command -v platformio pio ~/.local/bin/pio)",
+      "Bash(~/.platformio/penv/bin/pio run *)"
     ]
-  }
+  },
+  "enabledMcpjsonServers": [
+    "treecataje-device"
+  ],
+  "enableAllProjectMcpServers": true
 }

@@ -46,9 +46,10 @@ def main():
         print(f"  [{'PASS' if cond else 'FAIL'}] {name}" + (f" — {detail}" if detail else ""))
 
     # construction
-    check("window built", win.tabs.count() == 8, f"{win.tabs.count()} tabs")
+    check("window built", win.tabs.count() == 9, f"{win.tabs.count()} tabs")
     check("attack tab present", win.tabs.tabText(4) == "Attack", win.tabs.tabText(4))
     check("nrf tab present", win.tabs.tabText(5) == "NRF24", win.tabs.tabText(5))
+    check("audio tab present", win.tabs.tabText(6) == "Audio TX", win.tabs.tabText(6))
     check("functions groups populated", win.fn_groups.count() >= 10, f"{win.fn_groups.count()} groups")
     check("dictionaries populated", win.dict_tree.topLevelItemCount() == 3,
           f"{win.dict_tree.topLevelItemCount()} categories")

@@ -21,6 +21,7 @@ from PySide6.QtGui import QFont, QTextCursor
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QLabel, QLineEdit, QPushButton,
     QComboBox, QTextEdit, QPlainTextEdit, QTabWidget, QFileDialog, QSpinBox,
+    QDoubleSpinBox,
     QHBoxLayout, QVBoxLayout, QFormLayout, QGroupBox, QSplitter,
     QListWidget, QStackedWidget, QScrollArea, QMessageBox, QFrame, QCheckBox,
     QTreeWidget, QTreeWidgetItem, QTableWidget, QTableWidgetItem, QHeaderView,
@@ -80,6 +81,7 @@ class DeviceWorker(QObject):
     alog = Signal(str)                      # one Attack-tab log line
     nrf_found = Signal(list)                # [nrf device dict]
     nlog = Signal(str)                      # one NRF24-tab log line
+    audlog = Signal(str)                    # one Audio-tab log line
     listing = Signal(str, list)  # path, [(name, is_dir, size)]
     heap = Signal(int)           # free heap bytes (live telemetry)
     error = Signal(str)
@@ -526,6 +528,28 @@ class DeviceWorker(QObject):
         finally:
             self.crack_finished.emit()
 
+    def do_audio_tx(self, text, file, freq, dev_khz, rate, osr, reps, voice="en"):
+        """TTS (text) or audio file -> analog FM over the CC1101 (sigma-delta →
+        2-FSK). Logs to the Audio tab via audlog."""
+        if self.dev is None:
+            self.error.emit("not connected"); self.crack_finished.emit(); return
+        try:
+            import audio_tx
+            src = file or None
+            txt = text or None
+            self.audlog.emit("audio tx %g MHz dev=%g kHz reps=%d %s …" %
+                             (freq, dev_khz, reps, ("file " + file) if src else repr(txt)))
+            res = audio_tx.transmit(self.dev, source=src, text=txt, freq=freq,
+                                    dev_khz=dev_khz, rate=int(rate), osr=int(osr),
+                                    reps=int(reps), voice=voice,
+                                    log=lambda m: self.audlog.emit("  " + m))
+            self.audlog.emit("%s: %dB %.1fs on air" %
+                           ("done" if res["ok"] else "FAILED", res["bytes"], res["secs"]))
+        except Exception as e:  # noqa: BLE001
+            self.error.emit("audio tx error: %s" % e)
+        finally:
+            self.crack_finished.emit()
+
     def do_capture(self, kind, duration, interval):
         """Capture-to-file on the device (survives a slow/dropped link), then
         fetch + verify + analyze. Emits capture_done(meta, analysis)."""
@@ -569,6 +593,7 @@ class MainWindow(QMainWindow):
     sig_nrf_preset = Signal(str)                            # jam preset name
     sig_nrf_hijack = Signal(str, int, str, str, str)        # addr,ch,action,arg,proto
     sig_nrf_readkeys = Signal(str, int, int)                # addr,ch,secs
+    sig_audio_tx = Signal(str, str, float, float, int, int, int, str)  # text,file,freq,dev,rate,osr,reps,voice
     sig_list = Signal(str)
     sig_recon = Signal(float)
     sig_heap = Signal()
@@ -653,6 +678,7 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self._tab_stream(), "Stream")
         self.tabs.addTab(self._tab_attack(), "Attack")
         self.tabs.addTab(self._tab_nrf(), "NRF24")
+        self.tabs.addTab(self._tab_audio(), "Audio TX")
         self.tabs.addTab(self._tab_analyze(), "Analyze")
         self.tabs.addTab(self._tab_dicts(), "Dictionaries")
         split.addWidget(self.tabs)
@@ -1281,6 +1307,9 @@ class MainWindow(QMainWindow):
     def _nlog(self, msg):
         self.txt_nrf.appendPlainText(str(msg))
 
+    def _audlog(self, msg):
+        self.txt_audio.appendPlainText(str(msg))
+
     def _selected_nrf(self):
         row = self.tbl_nrf.currentRow()
         if row < 0 or row >= len(self._nrf_devs):
@@ -1336,6 +1365,115 @@ class MainWindow(QMainWindow):
             return
         self._crack_busy(True)
         self.sig_nrf_readkeys.emit(d["addr"], self.spn_nrf_ch.value(), self.spn_nrf_secs.value())
+
+    # ---- Audio TX tab: TTS / audio broadcast as analog FM over CC1101 ---------
+    def _tab_audio(self):
+        w = QWidget()
+        lay = QVBoxLayout(w)
+        lay.addWidget(QLabel(
+            "<b>Analog FM voice/audio over CC1101</b> — for analog radios / "
+            "walkie-talkies.<br>TTS or an audio file is oversampled to a "
+            "sigma-delta bitstream and keyed as 2-FSK FM."))
+
+        # radio params row
+        params = QHBoxLayout()
+        self.spn_audio_freq = QDoubleSpinBox()
+        self.spn_audio_freq.setRange(280.0, 928.0)
+        self.spn_audio_freq.setDecimals(3)
+        self.spn_audio_freq.setValue(433.0)
+        self.spn_audio_freq.setSuffix(" MHz")
+        self.spn_audio_dev = QDoubleSpinBox()
+        self.spn_audio_dev.setRange(0.5, 100.0)
+        self.spn_audio_dev.setDecimals(1)
+        self.spn_audio_dev.setValue(2.5)
+        self.spn_audio_dev.setSuffix(" kHz dev")
+        self.spn_audio_reps = QSpinBox()
+        self.spn_audio_reps.setRange(1, 20)
+        self.spn_audio_reps.setValue(1)
+        self.spn_audio_reps.setPrefix("×")
+        self.spn_audio_osr = QSpinBox()
+        self.spn_audio_osr.setRange(4, 64)
+        self.spn_audio_osr.setValue(16)
+        self.spn_audio_osr.setPrefix("osr ")
+        self.spn_audio_rate = QSpinBox()
+        self.spn_audio_rate.setRange(4000, 22050)
+        self.spn_audio_rate.setSingleStep(1000)
+        self.spn_audio_rate.setValue(8000)
+        self.spn_audio_rate.setSuffix(" Hz")
+        for lbl, wdg in (("Freq", self.spn_audio_freq), ("Dev", self.spn_audio_dev),
+                         ("Reps", self.spn_audio_reps), ("OSR", self.spn_audio_osr),
+                         ("Rate", self.spn_audio_rate)):
+            params.addWidget(QLabel(lbl))
+            params.addWidget(wdg)
+        params.addStretch(1)
+        lay.addLayout(params)
+
+        # TTS row
+        tts = QHBoxLayout()
+        self.ed_audio_text = QLineEdit()
+        self.ed_audio_text.setPlaceholderText("text to speak, e.g. break break, radio check")
+        self.cbo_audio_voice = QComboBox()
+        self.cbo_audio_voice.setEditable(True)
+        self.cbo_audio_voice.addItems(["en", "ru", "en+f3", "en+m3", "de", "fr", "es"])
+        self.btn_audio_say = QPushButton("🔊 Speak")
+        self.btn_audio_say.clicked.connect(self._audio_say)
+        tts.addWidget(QLabel("TTS"))
+        tts.addWidget(self.ed_audio_text, 1)
+        tts.addWidget(QLabel("voice"))
+        tts.addWidget(self.cbo_audio_voice)
+        tts.addWidget(self.btn_audio_say)
+        lay.addLayout(tts)
+
+        # audio file row
+        fl = QHBoxLayout()
+        self.ed_audio_file = QLineEdit()
+        self.ed_audio_file.setPlaceholderText("audio file (wav/mp3/ogg/…) to broadcast")
+        self.btn_audio_browse = QPushButton("Browse…")
+        self.btn_audio_browse.clicked.connect(self._audio_browse)
+        self.btn_audio_file = QPushButton("📡 Transmit file")
+        self.btn_audio_file.clicked.connect(self._audio_file)
+        fl.addWidget(QLabel("File"))
+        fl.addWidget(self.ed_audio_file, 1)
+        fl.addWidget(self.btn_audio_browse)
+        fl.addWidget(self.btn_audio_file)
+        lay.addLayout(fl)
+
+        self.txt_audio = QPlainTextEdit(readOnly=True)
+        lay.addWidget(self.txt_audio, 1)
+        lay.addWidget(QLabel(
+            "<i>Transmit only on frequencies you are permitted to use, to your own "
+            "radios. RF transmission is regulated.</i>"))
+        return w
+
+    def _audio_browse(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Audio file", "",
+            "Audio (*.wav *.mp3 *.ogg *.flac *.m4a *.aac);;All files (*)")
+        if path:
+            self.ed_audio_file.setText(path)
+
+    def _audio_say(self):
+        text = self.ed_audio_text.text().strip()
+        if not text:
+            self._audlog("type some text to speak first")
+            return
+        self.tabs.setCurrentWidget(self.txt_audio.parentWidget())
+        self._crack_busy(True)
+        self.sig_audio_tx.emit(text, "", self.spn_audio_freq.value(),
+                               self.spn_audio_dev.value(), self.spn_audio_rate.value(),
+                               self.spn_audio_osr.value(), self.spn_audio_reps.value(),
+                               self.cbo_audio_voice.currentText().strip() or "en")
+
+    def _audio_file(self):
+        path = self.ed_audio_file.text().strip()
+        if not path:
+            self._audlog("choose an audio file first")
+            return
+        self.tabs.setCurrentWidget(self.txt_audio.parentWidget())
+        self._crack_busy(True)
+        self.sig_audio_tx.emit("", path, self.spn_audio_freq.value(),
+                               self.spn_audio_dev.value(), self.spn_audio_rate.value(),
+                               self.spn_audio_osr.value(), self.spn_audio_reps.value(), "en")
 
     def _tab_analyze(self):
         w = QWidget(); v = QVBoxLayout(w)
@@ -1447,7 +1585,7 @@ class MainWindow(QMainWindow):
                   self.btn_scan, self.btn_atk_deauth, self.btn_atk_capture,
                   self.btn_atk_full, self.btn_atk_crackpcap,
                   self.btn_nrf_scan, self.btn_nrf_jamch, self.btn_nrf_preset, self.btn_nrf_hijack,
-                  self.btn_nrf_readkeys):
+                  self.btn_nrf_readkeys, self.btn_audio_say, self.btn_audio_file):
             b.setEnabled(not busy)
 
     def _cancel_crack(self):
@@ -1496,6 +1634,7 @@ class MainWindow(QMainWindow):
         self.worker.alog.connect(self._alog)
         self.worker.nrf_found.connect(self._on_nrf_found)
         self.worker.nlog.connect(self._nlog)
+        self.worker.audlog.connect(self._audlog)
         self.worker.listing.connect(self._on_listing)
         self.worker.heap.connect(self._on_heap)
         self.worker.error.connect(self._on_error)
@@ -1522,6 +1661,7 @@ class MainWindow(QMainWindow):
         self.sig_nrf_preset.connect(self.worker.do_nrf_jam_preset)
         self.sig_nrf_hijack.connect(self.worker.do_nrf_hijack)
         self.sig_nrf_readkeys.connect(self.worker.do_nrf_readkeys)
+        self.sig_audio_tx.connect(self.worker.do_audio_tx)
         self.sig_list.connect(self.worker.do_list)
         self.sig_recon.connect(self.worker.do_recon)
         self.sig_heap.connect(self.worker.do_heap)

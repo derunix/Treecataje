@@ -8,7 +8,9 @@
 #include <FS.h>
 #include <WiFi.h>
 #include <cstring>
+#include <driver/gpio.h>
 #include <esp_random.h>
+#include <esp_timer.h>
 #include <esp_wifi.h>
 #include <freertos/queue.h>
 #include <globals.h>
@@ -117,6 +119,7 @@ String buildCaps() {
 #if defined(HAS_NS4168_SPKR) || defined(BUZZ_PIN)
     c += ",sound";
 #endif
+    c += ",audio_tx"; // CC1101 software-FM voice/audio TX (sigma-delta -> 2-FSK)
     return c;
 }
 
@@ -433,6 +436,143 @@ void doFilePutEnd(uint32_t id) {
     emit("RSP " + String(id) + " written=" + String((uint32_t)g_put.written) + " sha256=" + got +
          " ok=" + String(ok ? "true" : "false"));
     emit("END " + String(id) + " " + String(ok ? 0 : 4));
+}
+
+// ---- analog FM voice/audio TX over CC1101 (sigma-delta PDM -> 2-FSK) ----------
+// The CC1101 has no native analog-FM audio path, so we synthesise one: 8-bit
+// unsigned PCM is oversampled into a 1-bit sigma-delta stream that keys GDO0. In
+// 2-FSK the carrier hops +/-deviation per bit, so the bit density encodes the
+// instantaneous frequency; an analog FM receiver's discriminator low-passes that
+// back into audio. Narrowband deviation (~2.5 kHz) matches PMR/analog walkie-
+// talkies on the 433/443 MHz band. The audio is uploaded first via
+// `companion file put <path>` (headerless u8 mono PCM @ <rate> Hz), then played
+// here. Blocking like rf_raw_emit() — the bit clock is paced off esp_timer with
+// absolute deadlines so scheduler jitter doesn't accumulate drift.
+//   companion audio tx path=<file> [freq=MHz] [dev=kHz] [rate=Hz] [osr=N] [reps=N]
+void doAudioTx(uint32_t id, const String &payload) {
+    if (g_streaming || g_capturing) {
+        emit("ERR " + String(id) + " 2 BUSY");
+        return;
+    }
+    String path = fieldValue(payload, "path");
+    if (!path.length()) {
+        emit("ERR " + String(id) + " 6 audio tx needs path=<file>");
+        return;
+    }
+    float freq = fieldValue(payload, "freq").toFloat();
+    if (freq < 280 || freq > 928) freq = 433.92f;
+    float dev = fieldValue(payload, "dev").toFloat();
+    if (dev <= 0) dev = 2.5f; // narrowband FM
+    uint32_t sr = fieldValue(payload, "rate").toInt();
+    if (sr < 4000 || sr > 22050) sr = 8000;
+    int osr = fieldValue(payload, "osr").toInt();
+    if (osr < 4 || osr > 64) osr = 16; // sigma-delta oversampling ratio
+    int reps = fieldValue(payload, "reps").toInt();
+    if (reps < 1) reps = 1;
+    if (reps > 20) reps = 20;
+
+    FS *fs;
+    if (!getFsStorage(fs) || !fs->exists(path)) {
+        emit("ERR " + String(id) + " 4 no such file");
+        return;
+    }
+    File f = fs->open(path);
+    if (!f || f.isDirectory()) {
+        if (f) f.close();
+        emit("ERR " + String(id) + " 4 cannot open");
+        return;
+    }
+    size_t n = f.size();
+    const size_t CAP = 512 * 1024; // ~64 s @ 8 kHz; PSRAM-backed
+    if (n == 0) {
+        f.close();
+        emit("ERR " + String(id) + " 6 empty file");
+        return;
+    }
+    if (n > CAP) n = CAP;
+    uint8_t *pcm = (uint8_t *)(psramFound() ? ps_malloc(n) : malloc(n));
+    if (!pcm) {
+        f.close();
+        emit("ERR " + String(id) + " 4 oom " + String((uint32_t)n));
+        return;
+    }
+    size_t got = f.read(pcm, n);
+    f.close();
+    if (got == 0) {
+        free(pcm);
+        emit("ERR " + String(id) + " 4 read failed");
+        return;
+    }
+
+    emit("RSP " + String(id) + " audio tx start path=" + path + " bytes=" + String((uint32_t)got) +
+         " freq=" + String(freq, 3) + " dev=" + String(dev, 2) + " rate=" + String(sr) +
+         " osr=" + String(osr) + " reps=" + String(reps));
+
+    // ---- configure CC1101 for 2-FSK with GDO0 as the async TX data line --------
+    // initRfModule("tx") brings up SPI + sets the IO-expander TX antenna switch +
+    // PA, but it leaves the part in OOK/TX. The CC1101 datasheet requires the
+    // synthesizer to be IDLE before changing FREQ/modem registers, so we drop to
+    // IDLE, reprogram for 2-FSK, re-run setMHZ() (which recalibrates), then SetTx.
+    g_radioOwner = "companion";
+    bool rfok = initRfModule("tx", freq);             // SPI + TX antenna band switch
+    ELECHOUSE_cc1101.setSidle();                      // IDLE before modem changes
+    ELECHOUSE_cc1101.setModulation(0);                // 2-FSK
+    ELECHOUSE_cc1101.setDeviation(dev);               // FM deviation (kHz)
+    ELECHOUSE_cc1101.setDRate((float)sr * osr / 1000.0f); // bit clock (kBaud)
+    ELECHOUSE_cc1101.setPktFormat(3);                 // async serial: GDO0 = data in
+    setMHZ(freq);                                     // rf_utils wrapper: band switch + freq + cal
+    ELECHOUSE_cc1101.setPA(12);                       // max TX power
+    gpio_num_t tx = (gpio_num_t)bruceConfigPins.CC1101_bus.io0;
+    pinMode(tx, OUTPUT);
+    gpio_set_level(tx, 0);
+    ELECHOUSE_cc1101.SetTx();                          // STX from IDLE -> calibrate -> TX
+
+    // Diagnostic readback: confirm the chip is reachable over SPI and actually in
+    // TX. MARCSTATE 0x13=TX, 0x14=TX_END; PARTNUM should be 0, VERSION ~0x14/0x04.
+    delayMicroseconds(300);
+    uint8_t marc = ELECHOUSE_cc1101.SpiReadStatus(0x35);
+    uint8_t part = ELECHOUSE_cc1101.SpiReadStatus(0x30);
+    uint8_t ver = ELECHOUSE_cc1101.SpiReadStatus(0x31);
+    uint8_t mdm2 = ELECHOUSE_cc1101.SpiReadReg(0x12);
+    uint8_t f2 = ELECHOUSE_cc1101.SpiReadReg(0x0D);
+    uint8_t f1 = ELECHOUSE_cc1101.SpiReadReg(0x0E);
+    uint8_t f0 = ELECHOUSE_cc1101.SpiReadReg(0x0F);
+    char dbg[120];
+    snprintf(dbg, sizeof(dbg),
+             "audio tx radio rfok=%d cc=%d marc=0x%02X part=0x%02X ver=0x%02X "
+             "mdmcfg2=0x%02X freq=%02X%02X%02X",
+             rfok ? 1 : 0, ELECHOUSE_cc1101.getCC1101() ? 1 : 0, marc, part, ver, mdm2, f2, f1, f0);
+    emit("RSP " + String(id) + " " + String(dbg));
+
+    // ---- play: 1st-order sigma-delta @ (sr*osr) bits/s, esp_timer-paced --------
+    const double usPerBit = 1000000.0 / ((double)sr * osr);
+    const int64_t t0 = esp_timer_get_time();
+    uint32_t totalBits = 0;
+    int acc = 0; // accumulator carries across the whole stream (noise shaping)
+    for (int r = 0; r < reps; r++) {
+        for (size_t i = 0; i < got; i++) {
+            int x = pcm[i]; // 0..255, DC centred at 128
+            for (int b = 0; b < osr; b++) {
+                acc += x;
+                int bit = 0;
+                if (acc >= 256) {
+                    acc -= 256;
+                    bit = 1;
+                }
+                gpio_set_level(tx, bit);
+                totalBits++;
+                int64_t deadline = t0 + (int64_t)(totalBits * usPerBit);
+                while (esp_timer_get_time() < deadline) { /* pace the bit clock */ }
+            }
+        }
+    }
+    gpio_set_level(tx, 0);
+    deinitRfModule();
+    g_radioOwner = "none";
+    free(pcm);
+    uint32_t elapsed = (uint32_t)((esp_timer_get_time() - t0) / 1000);
+    emit("RSP " + String(id) + " audio tx done bits=" + String(totalBits) + " ms=" + String(elapsed));
+    emit("END " + String(id) + " 0");
 }
 
 // ---- real radio stream kinds (wifi / nrf) -------------------------------------
@@ -1044,6 +1184,12 @@ void handleLine(SerialCli &cli, const String &raw, SerialDevice *reply) {
         emit("RSP " + String(id) + " deauth bssid=" + bs + " sta=" + (bcast ? "broadcast" : stArg) +
              " sent=" + String(sent) + "/" + String(count));
         emit("END " + String(id) + " 0");
+        return;
+    }
+    // Analog FM voice/audio TX over CC1101 (uploaded PCM -> sigma-delta -> 2-FSK).
+    //   companion audio tx path=<file> [freq=MHz] [dev=kHz] [rate=Hz] [osr=N] [reps=N]
+    if (payload.startsWith("companion audio tx")) {
+        doAudioTx(id, payload);
         return;
     }
 #if !defined(LITE_VERSION)
