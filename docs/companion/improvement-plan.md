@@ -78,6 +78,13 @@ enable/disable» (флаг `companionEnabled`) и показ/QR токена.
   (esp_wifi_80211_tx + глобальный sanity-check bypass). Полный цикл оркеструется на
   хосте (`wifi_attack.run_attack`): find→deauth→capture→crack→brute. ⚠ только для
   авторизованного тестирования своих сетей.
+- 🟢 **NRF24 jam + hijack** через CLI/companion: `nrf scan` (адреса/каналы/hits),
+  `nrf jam_sweep`, новый headless `nrf hijack <addr> <ch> <action> [arg] [proto]`
+  (action: type|run|calc|cmd|jam; logi/hid) — обёртка над inject-хелперами
+  nrf_hijack.cpp. Хост: `nrf_scan/nrf_jam_*/nrf_hijack` в proto, GUI вкладка
+  **NRF24** (скан→таблица→Jam/Hijack), TUI `:nrfscan/:nrfjam/:nrfsweep/:nrfhijack`
+  (та же DataTable в режиме nrf), MCP `device_nrf_scan/jam/hijack`.
+  ⚠ только авторизованное тестирование своих устройств.
 - ⬜ **P2 / M — nrf addr-сниффер в стрим** (адреса/каналы, не только RPD).
 - ⬜ **P2 / S — rf RAW-rx стрим** (декодированные кадры / сырые тайминги по событию GDO0).
 - ⬜ **P3 / S — параметры стрима** (rf шаг/число бинов, nrf диапазон каналов).

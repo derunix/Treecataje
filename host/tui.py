@@ -20,6 +20,12 @@ Smart console (single input box):
   :handshake / :hs       capture the selected AP's 4-way handshake (deauth+cap)
   :attack [ssid][wl][brute] full cycle via aircrack-ng (defaults to selected AP)
   :wordlists             list discovered wordlists + available crackers
+  :nrfscan [ms]          scan NRF24 devices into the table; pick a row
+  :nrfjam [secs]         carrier-jam the selected NRF device's channel
+  :nrfpreset <name>      jam a band preset (wifi/bt/ble/hid/mic/usb/video/rc/full/hopping)
+  :nrfpresets            list the jam presets
+  :nrfsweep              sweep-jam NRF channels 1-80
+  :nrfhijack <action>[arg][proto] HID inject (calc|cmd|type|run|jam) on selected
 Keys: ctrl+r refresh status · ctrl+l clear log · ctrl+q quit
 """
 import os
@@ -71,6 +77,9 @@ class CompanionTUI(App):
         self._aps = []               # last WiFi scan results
         self._target = None          # currently selected AP dict
         self._last_pcap = ""         # last captured handshake pcap
+        self._table_mode = "wifi"    # what the #aps DataTable currently shows
+        self._nrf_devs = []          # last NRF24 scan results
+        self._nrf_target = None      # currently selected NRF24 device
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -106,7 +115,9 @@ class CompanionTUI(App):
         aps = await asyncio.to_thread(self.dev.scan_aps, secs)
         self._aps = aps
         tbl = self.query_one("#aps", DataTable)
-        tbl.clear()
+        tbl.clear(columns=True)
+        tbl.add_columns("SSID", "BSSID", "ch", "RSSI", "enc")
+        self._table_mode = "wifi"
         for ap in aps:
             tbl.add_row(ap["ssid"] or "<hidden>", ap["bssid"], str(ap["ch"]),
                         str(ap["rssi"]), ap["enc"])
@@ -114,18 +125,49 @@ class CompanionTUI(App):
         if aps:
             self._target = aps[0]
 
+    @work(exclusive=True, group="dev")
+    async def nrf_scan_run(self, ms: int = 4000) -> None:
+        if not self.dev:
+            self.write_log("[red]not connected[/red]")
+            return
+        self.write_log(f"[yellow]scanning NRF24 {ms}ms…[/yellow]")
+        devs = await asyncio.to_thread(self.dev.nrf_scan, ms)
+        self._nrf_devs = devs
+        tbl = self.query_one("#aps", DataTable)
+        tbl.clear(columns=True)
+        tbl.add_columns("ch", "address", "hits")
+        self._table_mode = "nrf"
+        for d in devs:
+            tbl.add_row(str(d["ch"]), d["addr"], str(d["hits"]))
+        self.write_log(f"[green]found {len(devs)} NRF24 devices[/green] — select a row, then "
+                       ":nrfjam / :nrfhijack")
+        if devs:
+            self._nrf_target = devs[0]
+
     def on_data_table_row_highlighted(self, event) -> None:
-        if 0 <= event.cursor_row < len(self._aps):
-            self._target = self._aps[event.cursor_row]
-            ap = self._target
-            self.query_one("#aps", DataTable).border_title = (
-                f"target: {ap['ssid'] or '<hidden>'} [{ap['bssid']}] "
-                f"ch{ap['ch']} {ap['rssi']}dBm")
+        if self._table_mode == "nrf":
+            if 0 <= event.cursor_row < len(self._nrf_devs):
+                self._nrf_target = self._nrf_devs[event.cursor_row]
+                d = self._nrf_target
+                self.query_one("#aps", DataTable).border_title = (
+                    f"NRF target: {d['addr']} ch{d['ch']} hits={d['hits']}")
+        else:
+            if 0 <= event.cursor_row < len(self._aps):
+                self._target = self._aps[event.cursor_row]
+                ap = self._target
+                self.query_one("#aps", DataTable).border_title = (
+                    f"target: {ap['ssid'] or '<hidden>'} [{ap['bssid']}] "
+                    f"ch{ap['ch']} {ap['rssi']}dBm")
 
     def _require_target(self):
         if not self._target:
             self.write_log("[red]no target — Ctrl+S to scan and select a network[/red]")
         return self._target
+
+    def _require_nrf(self):
+        if not self._nrf_target:
+            self.write_log("[red]no NRF target — :nrfscan and select a device[/red]")
+        return self._nrf_target
 
     def _build_tree(self) -> None:
         tree = self.query_one("#cmds", Tree)
@@ -301,6 +343,61 @@ class CompanionTUI(App):
                 parts = text.split()
                 secs = float(parts[1]) if len(parts) > 1 else 6.0
                 self.scan(secs)
+                return
+            if text.startswith(":nrfscan"):
+                parts = text.split()
+                ms = int(parts[1]) if len(parts) > 1 else 4000
+                self.nrf_scan_run(ms)
+                return
+            if text.startswith(":nrfpresets"):
+                from companion_proto import NRF_JAM_PRESETS
+                self.write_log("[b]NRF jam presets:[/b]")
+                for nm, p in NRF_JAM_PRESETS.items():
+                    self.write_log(f"  [cyan]{nm}[/cyan] — {p['desc']}  {p['range']}")
+                return
+            if text.startswith(":nrfpreset"):
+                # :nrfpreset <name> — jam a named band preset
+                parts = text.split()
+                if len(parts) < 2:
+                    self.write_log("[red]usage: :nrfpreset <name> (see :nrfpresets)[/red]")
+                    return
+                self.write_log(f"[yellow]nrf jam preset[/yellow] {parts[1]} …")
+                try:
+                    r = await asyncio.to_thread(self.dev.nrf_jam_preset, parts[1])
+                    self.write_log("  " + " ".join(r.lines))
+                except Exception as e:  # noqa: BLE001
+                    self.write_log(f"[red]{e}[/red]")
+                return
+            if text.startswith(":nrfsweep"):
+                self.write_log("[yellow]nrf sweep jam 1-80…[/yellow]")
+                r = await asyncio.to_thread(self.dev.nrf_jam_sweep, 1, 80, 2, 60, 0)
+                self.write_log("  " + " ".join(r.lines))
+                return
+            if text.startswith(":nrfjam"):
+                # :nrfjam [secs] — jam the selected NRF device's channel
+                parts = text.split()
+                d = self._require_nrf()
+                if not d:
+                    return
+                secs = int(parts[1]) if len(parts) > 1 else 3
+                self.write_log(f"[yellow]nrf carrier jam[/yellow] ch={d['ch']} {secs}s …")
+                r = await asyncio.to_thread(self.dev.nrf_jam_channel, d["ch"], secs)
+                self.write_log("  " + " ".join(r.lines))
+                return
+            if text.startswith(":nrfhijack"):
+                # :nrfhijack <action> [arg] [proto] — on the selected NRF device
+                parts = text.split()
+                d = self._require_nrf()
+                if not d:
+                    return
+                action = parts[1] if len(parts) > 1 else "calc"
+                arg = parts[2] if len(parts) > 2 else ""
+                proto = parts[3] if len(parts) > 3 else "logi"
+                self.write_log(f"[yellow]nrf hijack[/yellow] {d['addr']} ch{d['ch']} "
+                               f"action={action} arg={arg or '-'} proto={proto} …")
+                r = await asyncio.to_thread(self.dev.nrf_hijack, d["addr"], d["ch"],
+                                            action, arg, proto)
+                self.write_log("  " + " ".join(r.lines))
                 return
             if text.startswith(":deauth"):
                 # :deauth [bssid] [ch] [count]  — bssid defaults to the selected AP

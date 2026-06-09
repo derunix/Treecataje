@@ -53,6 +53,19 @@ static uint32_t nrfJamSweepCallback(cmd *c) {
     return true;
 }
 
+// nrf hijack <addr> <channel> <action> [arg] [proto]
+//   action: type|run|calc|cmd|jam   proto: logi(default)|hid
+static uint32_t nrfHijackCallback(cmd *c) {
+    Command cmd(c);
+    String addr = cmd.getArgument(0).getValue();
+    int channel = cmd.getArgument(1).getValue().toInt();
+    String action = cmd.getArgument(2).getValue();
+    String arg = cmd.getArgument(3).getValue();
+    String proto = cmd.getArgument(4).getValue();
+    bool logitech = !(proto == "hid" || proto == "generic");
+    return nrf_hijack_inject(addr, channel, action, arg, logitech) ? true : false;
+}
+
 void createNrfCommands(SimpleCLI *cli) {
     Command nrf = cli->addCompositeCmd("nrf");
     Command scan = nrf.addCommand("scan", nrfScanCallback);
@@ -64,4 +77,11 @@ void createNrfCommands(SimpleCLI *cli) {
     jamSweep.addPosArg("step", "2");
     jamSweep.addPosArg("dwell", "60");
     jamSweep.addPosArg("noise", "0");
+
+    Command hijack = nrf.addCommand("hijack", nrfHijackCallback);
+    hijack.addPosArg("addr", "0000000000");
+    hijack.addPosArg("channel", "1");
+    hijack.addPosArg("action", "jam");
+    hijack.addPosArg("arg", "");
+    hijack.addPosArg("proto", "logi");
 }

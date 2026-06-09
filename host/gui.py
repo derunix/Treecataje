@@ -78,6 +78,8 @@ class DeviceWorker(QObject):
     crack_finished = Signal()               # a crack/attack run ended (re-enable UI)
     scan_found = Signal(list)               # [ap dict] from a WiFi scan
     alog = Signal(str)                      # one Attack-tab log line
+    nrf_found = Signal(list)                # [nrf device dict]
+    nlog = Signal(str)                      # one NRF24-tab log line
     listing = Signal(str, list)  # path, [(name, is_dir, size)]
     heap = Signal(int)           # free heap bytes (live telemetry)
     error = Signal(str)
@@ -438,6 +440,73 @@ class DeviceWorker(QObject):
         finally:
             self.crack_finished.emit()
 
+    # ---------- NRF24 tab (scan → select → jam/hijack) ----------
+    def do_nrf_scan(self, ms):
+        if self.dev is None:
+            self.error.emit("not connected"); self.crack_finished.emit(); return
+        try:
+            self.nlog.emit("nrf scan %.0fms …" % ms)
+            devs = self.dev.nrf_scan(int(ms))
+            self.nlog.emit("found %d NRF24 devices" % len(devs))
+            self.nrf_found.emit(devs)
+        except Exception as e:  # noqa: BLE001
+            self.error.emit("nrf scan error: %s" % e)
+        finally:
+            self.crack_finished.emit()
+
+    def do_nrf_jam_ch(self, ch, secs):
+        if self.dev is None:
+            self.error.emit("not connected"); self.crack_finished.emit(); return
+        try:
+            self.nlog.emit("carrier jam ch=%d for %ds …" % (ch, secs))
+            r = self.dev.nrf_jam_channel(ch, secs)
+            self.nlog.emit("  " + (" ".join(r.lines) or r.error or "done"))
+        except Exception as e:  # noqa: BLE001
+            self.error.emit("nrf jam error: %s" % e)
+        finally:
+            self.crack_finished.emit()
+
+    def do_nrf_jam_preset(self, name):
+        if self.dev is None:
+            self.error.emit("not connected"); self.crack_finished.emit(); return
+        try:
+            from companion_proto import NRF_JAM_PRESETS
+            p = NRF_JAM_PRESETS.get(name, {})
+            self.nlog.emit("jam preset '%s' %s %s …" % (name, p.get("desc", ""),
+                                                        p.get("range", "")))
+            r = self.dev.nrf_jam_preset(name)
+            self.nlog.emit("  " + (" ".join(r.lines) or r.error or "done"))
+        except Exception as e:  # noqa: BLE001
+            self.error.emit("nrf preset error: %s" % e)
+        finally:
+            self.crack_finished.emit()
+
+    def do_nrf_jam_sweep(self, start, stop, step, dwell, noise):
+        if self.dev is None:
+            self.error.emit("not connected"); self.crack_finished.emit(); return
+        try:
+            self.nlog.emit("sweep jam %d-%d step%d dwell%dms noise=%d …" %
+                           (start, stop, step, dwell, noise))
+            r = self.dev.nrf_jam_sweep(start, stop, step, dwell, noise)
+            self.nlog.emit("  " + (" ".join(r.lines) or r.error or "done"))
+        except Exception as e:  # noqa: BLE001
+            self.error.emit("nrf sweep error: %s" % e)
+        finally:
+            self.crack_finished.emit()
+
+    def do_nrf_hijack(self, addr, ch, action, arg, proto):
+        if self.dev is None:
+            self.error.emit("not connected"); self.crack_finished.emit(); return
+        try:
+            self.nlog.emit("hijack %s ch=%d action=%s arg=%r proto=%s …" %
+                           (addr, ch, action, arg, proto))
+            r = self.dev.nrf_hijack(addr, ch, action, arg, proto)
+            self.nlog.emit("  " + (" ".join(r.lines) or r.error or "done"))
+        except Exception as e:  # noqa: BLE001
+            self.error.emit("nrf hijack error: %s" % e)
+        finally:
+            self.crack_finished.emit()
+
     def do_capture(self, kind, duration, interval):
         """Capture-to-file on the device (survives a slow/dropped link), then
         fetch + verify + analyze. Emits capture_done(meta, analysis)."""
@@ -475,6 +544,11 @@ class MainWindow(QMainWindow):
     sig_cap_hs = Signal(str, int, str)              # bssid, ch, ssid
     sig_attack_t = Signal(str, str, int, str, str, bool)  # ssid,bssid,ch,wordlist,tool,brute
     sig_crack_pcap = Signal(str, str, str, bool)           # pcap, wordlist, tool, brute
+    sig_nrf_scan = Signal(float)                            # scan ms
+    sig_nrf_jam_ch = Signal(int, int)                       # channel, secs
+    sig_nrf_jam_sweep = Signal(int, int, int, int, int)     # start,stop,step,dwell,noise
+    sig_nrf_preset = Signal(str)                            # jam preset name
+    sig_nrf_hijack = Signal(str, int, str, str, str)        # addr,ch,action,arg,proto
     sig_list = Signal(str)
     sig_recon = Signal(float)
     sig_heap = Signal()
@@ -558,6 +632,7 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self._tab_files(), "Files")
         self.tabs.addTab(self._tab_stream(), "Stream")
         self.tabs.addTab(self._tab_attack(), "Attack")
+        self.tabs.addTab(self._tab_nrf(), "NRF24")
         self.tabs.addTab(self._tab_analyze(), "Analyze")
         self.tabs.addTab(self._tab_dicts(), "Dictionaries")
         split.addWidget(self.tabs)
@@ -1115,6 +1190,120 @@ class MainWindow(QMainWindow):
         self.sig_crack_pcap.emit(self._last_pcap, self.cbo_atk_wl.currentData() or "",
                                  self.cbo_atk_tool.currentText(), self.chk_atk_brute.isChecked())
 
+    def _tab_nrf(self):
+        w = QWidget(); v = QVBoxLayout(w)
+        r1 = QHBoxLayout()
+        self.btn_nrf_scan = QPushButton("⟳ Scan NRF24")
+        self.spn_nrf_ms = QSpinBox(); self.spn_nrf_ms.setRange(1000, 20000)
+        self.spn_nrf_ms.setValue(4000); self.spn_nrf_ms.setSingleStep(1000)
+        self.spn_nrf_ms.setSuffix(" ms")
+        self.lbl_nrf_target = QLabel("target: —"); self.lbl_nrf_target.setStyleSheet("font-weight:bold;")
+        r1.addWidget(self.btn_nrf_scan); r1.addWidget(self.spn_nrf_ms)
+        r1.addSpacing(12); r1.addWidget(self.lbl_nrf_target, 1)
+        v.addLayout(r1)
+        self.tbl_nrf = QTableWidget(0, 3)
+        self.tbl_nrf.setHorizontalHeaderLabels(["ch", "address", "hits"])
+        self.tbl_nrf.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.tbl_nrf.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.tbl_nrf.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.tbl_nrf.verticalHeader().setVisible(False)
+        hh = self.tbl_nrf.horizontalHeader()
+        hh.setSectionResizeMode(1, QHeaderView.Stretch)
+        hh.setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        hh.setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        v.addWidget(self.tbl_nrf, 1)
+        # channel + hijack action row (channel auto-fills from the selected device
+        # but is editable, so you can jam/inject on an arbitrary channel too)
+        r2 = QHBoxLayout()
+        self.spn_nrf_ch = QSpinBox(); self.spn_nrf_ch.setRange(0, 125); self.spn_nrf_ch.setValue(50)
+        self.spn_nrf_ch.setPrefix("ch ")
+        self.cbo_nrf_action = QComboBox()
+        self.cbo_nrf_action.addItems(["calc", "cmd", "type", "run", "jam"])
+        self.cbo_nrf_proto = QComboBox(); self.cbo_nrf_proto.addItems(["logi", "hid"])
+        self.ed_nrf_arg = QLineEdit(); self.ed_nrf_arg.setPlaceholderText("arg (text for type/run, secs for jam)")
+        r2.addWidget(QLabel("channel")); r2.addWidget(self.spn_nrf_ch)
+        r2.addWidget(QLabel("action")); r2.addWidget(self.cbo_nrf_action)
+        r2.addWidget(QLabel("proto")); r2.addWidget(self.cbo_nrf_proto)
+        r2.addWidget(self.ed_nrf_arg, 1)
+        v.addLayout(r2)
+        # jam preset row
+        from companion_proto import NRF_JAM_PRESETS
+        rp = QHBoxLayout()
+        self.cbo_nrf_preset = QComboBox()
+        for nm, p in NRF_JAM_PRESETS.items():
+            self.cbo_nrf_preset.addItem("%s — %s" % (nm, p["desc"]), nm)
+        self.btn_nrf_preset = QPushButton("Jam preset")
+        rp.addWidget(QLabel("jam preset")); rp.addWidget(self.cbo_nrf_preset, 1)
+        rp.addWidget(self.btn_nrf_preset)
+        v.addLayout(rp)
+        # action buttons
+        r3 = QHBoxLayout()
+        self.btn_nrf_jamch = QPushButton("Jam channel 3s")
+        self.btn_nrf_hijack = QPushButton("⚡ Hijack")
+        self.btn_nrf_stop = QPushButton("Stop"); self.btn_nrf_stop.setEnabled(False)
+        for b in (self.btn_nrf_jamch, self.btn_nrf_hijack, self.btn_nrf_stop):
+            r3.addWidget(b)
+        r3.addStretch(1)
+        v.addLayout(r3)
+        self.txt_nrf = QPlainTextEdit(readOnly=True); self.txt_nrf.setFont(_mono())
+        self.txt_nrf.setPlaceholderText("Scan NRF24 → pick a device → Jam / Hijack. "
+                                        "Authorized testing of your own devices only.")
+        v.addWidget(self.txt_nrf, 1)
+        self._nrf_devs = []
+        return w
+
+    def _nlog(self, msg):
+        self.txt_nrf.appendPlainText(str(msg))
+
+    def _selected_nrf(self):
+        row = self.tbl_nrf.currentRow()
+        if row < 0 or row >= len(self._nrf_devs):
+            self._nlog("select a device in the table first")
+            return None
+        return self._nrf_devs[row]
+
+    def _do_nrf_scan(self):
+        self.tabs.setCurrentWidget(self.txt_nrf.parentWidget())
+        self.txt_nrf.appendPlainText("scanning NRF24 …")
+        self._crack_busy(True)
+        self.sig_nrf_scan.emit(float(self.spn_nrf_ms.value()))
+
+    @Slot(list)
+    def _on_nrf_found(self, devs):
+        self._nrf_devs = devs
+        self.tbl_nrf.setRowCount(len(devs))
+        for i, d in enumerate(devs):
+            for c, txt in enumerate([str(d["ch"]), d["addr"], str(d["hits"])]):
+                self.tbl_nrf.setItem(i, c, QTableWidgetItem(txt))
+        if devs:
+            self.tbl_nrf.selectRow(0)
+            self._on_nrf_selected()
+
+    def _on_nrf_selected(self):
+        d = self._selected_nrf()
+        if d:
+            self.spn_nrf_ch.setValue(d["ch"])   # auto-fill the channel field
+            self.lbl_nrf_target.setText("target: %s  ch%d  hits=%d" % (d["addr"], d["ch"], d["hits"]))
+
+    def _nrf_jam_ch(self):
+        # jams the channel field (no device selection required)
+        self._crack_busy(True)
+        self.sig_nrf_jam_ch.emit(self.spn_nrf_ch.value(), 3)
+
+    def _nrf_preset(self):
+        self.tabs.setCurrentWidget(self.txt_nrf.parentWidget())
+        self._crack_busy(True)
+        self.sig_nrf_preset.emit(self.cbo_nrf_preset.currentData())
+
+    def _nrf_hijack(self):
+        d = self._selected_nrf()
+        if not d:
+            return
+        self._crack_busy(True)
+        self.sig_nrf_hijack.emit(d["addr"], self.spn_nrf_ch.value(),
+                                 self.cbo_nrf_action.currentText(),
+                                 self.ed_nrf_arg.text().strip(), self.cbo_nrf_proto.currentText())
+
     def _tab_analyze(self):
         w = QWidget(); v = QVBoxLayout(w)
         row = QHBoxLayout()
@@ -1219,11 +1408,12 @@ class MainWindow(QMainWindow):
                              self.chk_brute.isChecked())
 
     def _crack_busy(self, busy):
-        for b in (self.btn_crack_cancel, self.btn_atk_stop):
+        for b in (self.btn_crack_cancel, self.btn_atk_stop, self.btn_nrf_stop):
             b.setEnabled(busy)
         for b in (self.btn_crack_local, self.btn_crack_dev, self.btn_attack,
                   self.btn_scan, self.btn_atk_deauth, self.btn_atk_capture,
-                  self.btn_atk_full, self.btn_atk_crackpcap):
+                  self.btn_atk_full, self.btn_atk_crackpcap,
+                  self.btn_nrf_scan, self.btn_nrf_jamch, self.btn_nrf_preset, self.btn_nrf_hijack):
             b.setEnabled(not busy)
 
     def _cancel_crack(self):
@@ -1270,6 +1460,8 @@ class MainWindow(QMainWindow):
         self.worker.crack_finished.connect(self._on_crack_finished)
         self.worker.scan_found.connect(self._on_scan_found)
         self.worker.alog.connect(self._alog)
+        self.worker.nrf_found.connect(self._on_nrf_found)
+        self.worker.nlog.connect(self._nlog)
         self.worker.listing.connect(self._on_listing)
         self.worker.heap.connect(self._on_heap)
         self.worker.error.connect(self._on_error)
@@ -1290,6 +1482,11 @@ class MainWindow(QMainWindow):
         self.sig_cap_hs.connect(self.worker.do_capture_hs)
         self.sig_attack_t.connect(self.worker.do_attack_target)
         self.sig_crack_pcap.connect(self.worker.do_crack_pcap)
+        self.sig_nrf_scan.connect(self.worker.do_nrf_scan)
+        self.sig_nrf_jam_ch.connect(self.worker.do_nrf_jam_ch)
+        self.sig_nrf_jam_sweep.connect(self.worker.do_nrf_jam_sweep)
+        self.sig_nrf_preset.connect(self.worker.do_nrf_jam_preset)
+        self.sig_nrf_hijack.connect(self.worker.do_nrf_hijack)
         self.sig_list.connect(self.worker.do_list)
         self.sig_recon.connect(self.worker.do_recon)
         self.sig_heap.connect(self.worker.do_heap)
@@ -1318,6 +1515,13 @@ class MainWindow(QMainWindow):
         self.btn_atk_full.clicked.connect(self._atk_full)
         self.btn_atk_crackpcap.clicked.connect(self._atk_crack_pcap)
         self.btn_atk_stop.clicked.connect(self._cancel_crack)
+        # NRF24 tab
+        self.btn_nrf_scan.clicked.connect(self._do_nrf_scan)
+        self.tbl_nrf.itemSelectionChanged.connect(self._on_nrf_selected)
+        self.btn_nrf_jamch.clicked.connect(self._nrf_jam_ch)
+        self.btn_nrf_preset.clicked.connect(self._nrf_preset)
+        self.btn_nrf_hijack.clicked.connect(self._nrf_hijack)
+        self.btn_nrf_stop.clicked.connect(self._cancel_crack)
         self.btn_fb_up.clicked.connect(self._fb_up)
         self.btn_fb_refresh.clicked.connect(self._fb_refresh)
         self.fb_list.itemDoubleClicked.connect(self._fb_activate)

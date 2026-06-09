@@ -46,8 +46,9 @@ def main():
         print(f"  [{'PASS' if cond else 'FAIL'}] {name}" + (f" — {detail}" if detail else ""))
 
     # construction
-    check("window built", win.tabs.count() == 7, f"{win.tabs.count()} tabs")
+    check("window built", win.tabs.count() == 8, f"{win.tabs.count()} tabs")
     check("attack tab present", win.tabs.tabText(4) == "Attack", win.tabs.tabText(4))
+    check("nrf tab present", win.tabs.tabText(5) == "NRF24", win.tabs.tabText(5))
     check("functions groups populated", win.fn_groups.count() >= 10, f"{win.fn_groups.count()} groups")
     check("dictionaries populated", win.dict_tree.topLevelItemCount() == 3,
           f"{win.dict_tree.topLevelItemCount()} categories")
@@ -117,6 +118,15 @@ def main():
     sel = win._selected_ap()
     check("selected AP resolves", sel and sel["bssid"] == "AA:BB:CC:DD:EE:01",
           sel["bssid"] if sel else "none")
+
+    # NRF24 tab: scan results populate the table + selection sets the target
+    nrf = [{"ch": 50, "addr": "C2C2C2C2C2", "hits": 127},
+           {"ch": 52, "addr": "AABBCCDDEE", "hits": 40}]
+    win._on_nrf_found(nrf)
+    check("nrf scan populated table", win.tbl_nrf.rowCount() == 2, f"{win.tbl_nrf.rowCount()} rows")
+    nsel = win._selected_nrf()
+    check("nrf device resolves", nsel and nsel["addr"] == "C2C2C2C2C2",
+          nsel["addr"] if nsel else "none")
 
     # disconnect
     win.sig_disconnect.emit()

@@ -624,6 +624,70 @@ def device_wifi_attack(ssid: str = "", bssid: str = "", ch: int = 0, wordlist: s
 
 
 @mcp.tool()
+def device_nrf_scan(ms: int = 4000) -> str:
+    """Scan for NRF24 devices (2.4 GHz HID dongles etc.). Returns a list of
+    {channel, address, hits}, strongest first. Keep the device screen idle (NRF24
+    shares the TFT SPI bus on T-Embed)."""
+    with _lock:
+        try:
+            _ensure()
+            devs = _dev.nrf_scan(ms)
+            if not devs:
+                return "no NRF24 devices found"
+            lines = ["%2d  ch%-3d  %s  hits=%d" % (i + 1, d["ch"], d["addr"], d["hits"])
+                     for i, d in enumerate(devs)]
+            return "NRF24 devices:\n" + "\n".join(lines)
+        except Exception as e:  # noqa: BLE001
+            return f"error: {e}"
+
+
+@mcp.tool()
+def device_nrf_jam(preset: str = "", channel: int = 0, secs: int = 3, start: int = 1,
+                   stop: int = 80, step: int = 2, dwell: int = 60, noise: int = 0) -> str:
+    """Jam NRF24 (2.4 GHz). Priority: preset > channel > custom sweep.
+      preset: a band name — wifi|bt|ble|ble_adv|hid|mic|usb|video|rc|full|hopping
+      channel>0: constant-carrier jam that single channel for `secs`
+      else: sweep-jam the [start,stop] range (step/dwell/noise)
+
+    LEGAL: authorized testing of your own devices only — jamming is disruptive."""
+    with _lock:
+        try:
+            _ensure()
+            if preset:
+                return _fmt(_dev.nrf_jam_preset(preset))
+            if channel > 0:
+                return _fmt(_dev.nrf_jam_channel(channel, secs))
+            return _fmt(_dev.nrf_jam_sweep(start, stop, step, dwell, noise))
+        except Exception as e:  # noqa: BLE001
+            return f"error: {e}"
+
+
+@mcp.tool()
+def device_nrf_jam_presets() -> str:
+    """List the NRF24 jam band presets (name → channel range + description)."""
+    from companion_proto import NRF_JAM_PRESETS
+    return "\n".join("%-8s %-40s %s" % (n, p["desc"], p["range"])
+                     for n, p in NRF_JAM_PRESETS.items())
+
+
+@mcp.tool()
+def device_nrf_hijack(addr: str, channel: int, action: str = "calc", arg: str = "",
+                      proto: str = "logi") -> str:
+    """HID-inject against an NRF24 dongle (mousejack-style). addr: 10 hex chars
+    (5-byte address, from device_nrf_scan). action: type|run|calc|cmd|jam. arg: a
+    single token (text for type, command for run, seconds for jam). proto:
+    logi (Logitech Unifying) | hid (generic).
+
+    LEGAL: authorized testing of your own devices only."""
+    with _lock:
+        try:
+            _ensure()
+            return _fmt(_dev.nrf_hijack(addr, channel, action, arg, proto))
+        except Exception as e:  # noqa: BLE001
+            return f"error: {e}"
+
+
+@mcp.tool()
 def device_disconnect() -> str:
     """Close the transport to the device."""
     global _dev

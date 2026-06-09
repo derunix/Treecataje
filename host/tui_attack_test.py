@@ -18,6 +18,10 @@ class FakeDev:
         return [{"bssid": "AA:BB:CC:00:00:01", "ch": 6, "ssid": "HomeNet", "rssi": -40, "enc": "wpa2"},
                 {"bssid": "AA:BB:CC:00:00:02", "ch": 11, "ssid": "Cafe", "rssi": -71, "enc": "wpa/wpa2"}]
 
+    def nrf_scan(self, ms=4000):
+        return [{"ch": 50, "addr": "C2C2C2C2C2", "hits": 127},
+                {"ch": 52, "addr": "AABBCCDDEE", "hits": 40}]
+
 
 async def main():
     app = CompanionTUI("/dev/null")
@@ -40,6 +44,21 @@ async def main():
         c2 = app._target["ssid"] == "Cafe"
         ok &= c2
         print(f"  [{'PASS' if c2 else 'FAIL'}] row selection updates target ({app._target['ssid']})")
+
+        # NRF24: re-uses the same table in "nrf" mode
+        app.nrf_scan_run(4000)
+        for _ in range(30):
+            await pilot.pause(0.1)
+            if app._nrf_devs:
+                break
+        c3 = tbl.row_count == 2 and app._table_mode == "nrf"
+        ok &= c3
+        print(f"  [{'PASS' if c3 else 'FAIL'}] nrf scan switched table to nrf ({tbl.row_count} rows, {app._table_mode})")
+        app.on_data_table_row_highlighted(SimpleNamespace(cursor_row=1))
+        c4 = app._nrf_target and app._nrf_target["addr"] == "AABBCCDDEE"
+        ok &= c4
+        print(f"  [{'PASS' if c4 else 'FAIL'}] nrf row selection updates target "
+              f"({app._nrf_target and app._nrf_target['addr']})")
     print("\n" + ("ALL PASS (tui attack picker)" if ok else "SOME FAILURES"))
     return 0 if ok else 1
 

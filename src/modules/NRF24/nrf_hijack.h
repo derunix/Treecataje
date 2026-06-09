@@ -13,3 +13,8 @@ void nrf_mousejack();
 
 // Headless sweep jam (for serial command)
 void nrf_sweep_jam(int startCh, int stopCh, int step, int dwellMs, bool noise);
+
+// Headless HID hijack/inject (serial + companion CLI). addrHex = 10 hex chars,
+// action = type|run|calc|cmd|jam, logitech selects the Unifying protocol.
+bool nrf_hijack_inject(const String &addrHex, int channel, const String &action,
+                       const String &arg, bool logitech = true);

@@ -28,3 +28,4 @@ host/downloads/
 # bulk-imported databases (large; import locally)
 host/dictionaries/oui/ieee_*.csv
 host/dictionaries/ir/*__*.ir
+Treecataje-factory-nrf.bin
