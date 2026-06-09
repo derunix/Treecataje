@@ -121,7 +121,14 @@ enable/disable» (флаг `companionEnabled`) и показ/QR токена.
 - 🟢 23 инструмента (connect/run/файлы/анализ/стрим/recon/словари/токен/capture/wpa).
 - 🟢 **`device_capture`** (Sprint B): захват в файл на устройстве → fetch + verify + анализ.
 - 🟢 **`wpa_crack`/`device_handshakes`/`device_crack_handshake`**: WPA-крек на хосте.
-- 🟢 **`device_deauth`/`device_wifi_attack`**: deauth-инъекция и полный цикл атаки.
+- 🟢 **`device_deauth`/`device_wifi_attack`/`list_crackers`**: deauth + полный цикл.
+- 🟢 **Реальные крекеры** (`crackers.py`): GUI/TUI/MCP/оркестрация используют
+  **aircrack-ng** (приоритет, стабилен на CPU) / hashcat (если есть рабочий OpenCL —
+  на uConsole PoCL падает) с автодетектом, fallback на pure-Python. Автопоиск словарей
+  (`/usr/share/wordlists`, `captures/`, `dictionaries/wordlists/`; rockyou тянется из
+  Kali-докера). Live-прогресс (k/s), отмена, экспорт `.hc22000` для GPU. GUI: выбор
+  инструмента+словаря+brute в Analyze; TUI: `:crack`/`:attack`/`:wordlists`;
+  `phase11_crackers_test.py`. Замер на cortex-a72: aircrack ~408/с (потолок CPU).
 - ⬜ **P3 / S — ресурсы MCP**: отдавать последние captures/отчёты как ресурсы.
 - 🟢 Правило: держать MCP в синхроне с протоколом (соблюдается).
 

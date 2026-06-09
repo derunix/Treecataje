@@ -74,6 +74,7 @@ class DeviceWorker(QObject):
     report = Signal(str)         # analyze report text
     stream_done = Signal(list, list)        # start_lines, events
     capture_done = Signal(dict, str)        # cap-meta dict, host analysis text
+    crack_finished = Signal()               # a crack/attack run ended (re-enable UI)
     listing = Signal(str, list)  # path, [(name, is_dir, size)]
     heap = Signal(int)           # free heap bytes (live telemetry)
     error = Signal(str)
@@ -82,6 +83,7 @@ class DeviceWorker(QObject):
         super().__init__()
         self.dev = None
         self.transport = "usb"
+        self._crack_cancel = None
 
     @Slot(str, str, str, str)
     def do_connect(self, transport, port, name, token):
@@ -247,11 +249,25 @@ class DeviceWorker(QObject):
         except Exception as e:  # noqa: BLE001
             self.error.emit("stream error: %s" % e)
 
-    def do_crack(self, pcap, wordlist, remote):
-        """Crack a WPA handshake. If `remote` is set, fetch that path from the
-        device first; otherwise `pcap` is a local file. Emits report()."""
+    def cancel_crack(self):
+        if self._crack_cancel is not None:
+            self._crack_cancel.set()
+
+    def do_crack(self, pcap, wordlist, remote, tool, brute):
+        """Crack a WPA handshake with a real cracker (aircrack-ng/hashcat/python).
+        If `remote` is set, fetch that pcap from the device first."""
+        import threading
+        self._crack_cancel = threading.Event()
+        logs = []
+
+        def log(m):
+            logs.append(str(m)); self.report.emit("\n".join(logs))
+
+        def ev(e):
+            if e.get("type") == "progress":
+                log("  %s tried @ %.0f/s" % (e.get("tested", "?"), e.get("rate", 0)))
         try:
-            import wpa_crack as wcm
+            import crackers as ck
             local = pcap
             if remote:
                 if self.dev is None:
@@ -259,43 +275,57 @@ class DeviceWorker(QObject):
                     return
                 os.makedirs(CAP_DIR, exist_ok=True)
                 local = os.path.join(CAP_DIR, os.path.basename(remote) or "hs.pcap")
-                self.log.emit("fetch %s …" % remote)
+                log("fetch %s …" % remote)
                 got = self.dev.file_get(remote, local, 512, 120)
-                self.log.emit("fetched %s B" % got.get("size"))
-            self.log.emit("cracking %s …" % os.path.basename(local))
-            res = wcm.crack_file(local, wordlist, "")
-            lines = ["WPA crack — %s" % os.path.basename(local),
-                     "wordlist: %s" % os.path.basename(wordlist), ""]
-            for c in res.get("candidates", []):
-                lines.append("  handshake: " + c)
-            lines.append("")
+                log("fetched %s B" % got.get("size"))
+            bssid = ck.detect_bssid(local)
+            hc = local.rsplit(".", 1)[0] + ".hc22000"
+            try:
+                import wpa_crack as wcm
+                wcm.export_hc22000(local, hc)
+            except Exception:  # noqa: BLE001
+                hc = ""
+            log("cracking %s with %s (bssid %s)…" % (os.path.basename(local), tool, bssid or "?"))
+            res = ck.crack_wordlist(local, wordlist, bssid=bssid, tool=tool, hc22000=hc,
+                                    on_event=ev, cancel=self._crack_cancel)
+            if not res["ok"] and brute and not self._crack_cancel.is_set():
+                log("wordlist failed; brute 8-digit via %s …" % tool)
+                res = ck.crack_brute(local, "0123456789", 8, bssid=bssid, tool=tool,
+                                     hc22000=hc, on_event=ev, cancel=self._crack_cancel)
             if res.get("ok"):
-                lines.append("✓ KEY FOUND: %s   (after %d tries)" % (res["key"], res.get("tried", 0)))
+                log("✓ KEY FOUND (%s): %s" % (res.get("tool"), res["key"]))
+            elif self._crack_cancel.is_set():
+                log("✗ cancelled")
             else:
-                lines.append("✗ not found: %s (tried %d)" % (res.get("error", "exhausted"),
-                                                              res.get("tried", 0)))
-            self.report.emit("\n".join(lines))
+                log("✗ not found (%s)" % res.get("tool"))
         except Exception as e:  # noqa: BLE001
             self.error.emit("crack error: %s" % e)
+        finally:
+            self.crack_finished.emit()
 
-    def do_attack(self, ssid, wordlist, mask):
+    def do_attack(self, ssid, wordlist, tool, brute):
         """Full WPA attack cycle (find→deauth→capture→crack→brute) on the device."""
         if self.dev is None:
             self.error.emit("not connected")
+            self.crack_finished.emit()
             return
+        import threading
+        self._crack_cancel = threading.Event()
+        logs = []
+
+        def log(m):
+            logs.append(str(m)); self.report.emit("\n".join(logs))
         try:
             import wifi_attack
             os.makedirs(CAP_DIR, exist_ok=True)
-            logs = []
-
-            def log(m):
-                logs.append(str(m))
-                self.report.emit("\n".join(logs))
-            out = wifi_attack.run_attack(self.dev, ssid=ssid, wordlist=wordlist, mask=mask,
-                                         local_dir=CAP_DIR, log=log)
+            out = wifi_attack.run_attack(self.dev, ssid=ssid, wordlist=wordlist, tool=tool,
+                                         brute=brute, local_dir=CAP_DIR, log=log,
+                                         cancel=self._crack_cancel)
             self.report.emit("\n".join(logs) + "\n\n" + wifi_attack.format_result(out))
         except Exception as e:  # noqa: BLE001
             self.error.emit("attack error: %s" % e)
+        finally:
+            self.crack_finished.emit()
 
     def do_capture(self, kind, duration, interval):
         """Capture-to-file on the device (survives a slow/dropped link), then
@@ -327,8 +357,8 @@ class MainWindow(QMainWindow):
     sig_analyze = Signal(str)
     sig_stream = Signal(str, float)
     sig_capture = Signal(str, float, float)
-    sig_crack = Signal(str, str, str)  # pcap, wordlist, remote
-    sig_attack = Signal(str, str, str)  # ssid, wordlist, mask
+    sig_crack = Signal(str, str, str, str, bool)  # pcap, wordlist, remote, tool, brute
+    sig_attack = Signal(str, str, str, bool)       # ssid, wordlist, tool, brute
     sig_list = Signal(str)
     sig_recon = Signal(float)
     sig_heap = Signal()
@@ -857,30 +887,58 @@ class MainWindow(QMainWindow):
         row.addWidget(self.btn_recon); row.addWidget(self.spn_recon)
         row.addWidget(self.btn_report_save)
         v.addLayout(row)
-        # WPA handshake cracking row
+        # WPA cracking row — real tools (aircrack-ng/hashcat) + discovered wordlists
+        import crackers as _ck
         row2 = QHBoxLayout()
-        self.btn_crack_local = QPushButton("Crack WPA (local pcap)…")
+        self.cbo_tool = QComboBox(); self.cbo_tool.addItems(_ck.available_tools())
+        self.cbo_wordlist = QComboBox()
+        self._reload_wordlists()
+        self.chk_brute = QCheckBox("then brute 8d")
+        self.chk_brute.setToolTip("If the wordlist fails, brute all 8-digit numeric "
+                                  "passwords (crunch | aircrack-ng).")
+        row2.addWidget(QLabel("tool")); row2.addWidget(self.cbo_tool)
+        row2.addWidget(QLabel("wordlist")); row2.addWidget(self.cbo_wordlist, 1)
+        row2.addWidget(self.chk_brute)
+        v.addLayout(row2)
+        row3 = QHBoxLayout()
+        self.btn_crack_local = QPushButton("Crack local pcap…")
         self.btn_crack_dev = QPushButton("Crack device handshake…")
         self.btn_attack = QPushButton("WPA attack (full cycle)…")
-        self.btn_attack.setToolTip("Find AP → deauth → capture handshake → crack by wordlist "
-                                   "→ brute.\nAuthorized testing only.")
-        self.btn_wordlist = QPushButton("Wordlist…")
-        self.lbl_wordlist = QLabel("common.txt")
-        self._wordlist = os.path.join(WORDLIST_DIR, "common.txt")
-        row2.addWidget(self.btn_crack_local); row2.addWidget(self.btn_crack_dev)
-        row2.addWidget(self.btn_attack)
-        row2.addWidget(self.btn_wordlist); row2.addWidget(self.lbl_wordlist); row2.addStretch(1)
-        v.addLayout(row2)
+        self.btn_attack.setToolTip("Find AP → deauth → capture handshake → crack.\n"
+                                   "Authorized testing of your own network only.")
+        self.btn_crack_cancel = QPushButton("Stop"); self.btn_crack_cancel.setEnabled(False)
+        self.btn_wordlist = QPushButton("Browse…")
+        for b in (self.btn_crack_local, self.btn_crack_dev, self.btn_attack,
+                  self.btn_crack_cancel, self.btn_wordlist):
+            row3.addWidget(b)
+        row3.addStretch(1)
+        v.addLayout(row3)
         self.txt_report = QPlainTextEdit(readOnly=True); self.txt_report.setFont(_mono())
         v.addWidget(self.txt_report, 1)
         return w
 
+    def _reload_wordlists(self):
+        import crackers as _ck
+        self.cbo_wordlist.clear()
+        self._wordlists = _ck.list_wordlists()
+        for label, path, _sz in self._wordlists:
+            self.cbo_wordlist.addItem(label, path)
+        if not self._wordlists:
+            self.cbo_wordlist.addItem("(none found — Browse…)", "")
+
+    def _cur_wordlist(self):
+        return self.cbo_wordlist.currentData() or ""
+
+    def _cur_tool(self):
+        return self.cbo_tool.currentText()
+
     def _pick_wordlist(self):
-        os.makedirs(WORDLIST_DIR, exist_ok=True)
-        path, _ = QFileDialog.getOpenFileName(self, "Wordlist", WORDLIST_DIR, "Text (*.txt);;All (*)")
+        path, _ = QFileDialog.getOpenFileName(self, "Wordlist", WORDLIST_DIR,
+                                              "Wordlists (*.txt *.lst *.dic);;All (*)")
         if path:
-            self._wordlist = path
-            self.lbl_wordlist.setText(os.path.basename(path))
+            self.cbo_wordlist.insertItem(0, "%s (%s)" % (os.path.basename(path),
+                                          _human_size(os.path.getsize(path))), path)
+            self.cbo_wordlist.setCurrentIndex(0)
 
     def _crack_local(self):
         path, _ = QFileDialog.getOpenFileName(self, "Handshake pcap", CAP_DIR,
@@ -888,8 +946,11 @@ class MainWindow(QMainWindow):
         if not path:
             return
         self.tabs.setCurrentWidget(self.txt_report.parentWidget())
-        self.txt_report.setPlainText("cracking %s …" % os.path.basename(path))
-        self.sig_crack.emit(path, self._wordlist, "")
+        self.txt_report.setPlainText("cracking %s with %s …" %
+                                     (os.path.basename(path), self._cur_tool()))
+        self._crack_busy(True)
+        self.sig_crack.emit(path, self._cur_wordlist(), "", self._cur_tool(),
+                            self.chk_brute.isChecked())
 
     def _crack_device(self):
         from PySide6.QtWidgets import QInputDialog
@@ -899,19 +960,31 @@ class MainWindow(QMainWindow):
             return
         self.tabs.setCurrentWidget(self.txt_report.parentWidget())
         self.txt_report.setPlainText("fetching + cracking %s …" % remote)
-        self.sig_crack.emit("", self._wordlist, remote.strip())
+        self._crack_busy(True)
+        self.sig_crack.emit("", self._cur_wordlist(), remote.strip(), self._cur_tool(),
+                            self.chk_brute.isChecked())
 
     def _do_attack(self):
         from PySide6.QtWidgets import QInputDialog
         ssid, ok = QInputDialog.getText(self, "WPA attack",
-                                        "Target SSID (authorized testing only):")
+                                        "Target SSID (authorized testing of your own network only):")
         if not ok or not ssid.strip():
             return
-        mask, _ = QInputDialog.getText(self, "WPA attack",
-                                       "Brute mask after wordlist (optional, e.g. ?d?d?d?d?d?d?d?d):")
         self.tabs.setCurrentWidget(self.txt_report.parentWidget())
         self.txt_report.setPlainText("attacking %s …" % ssid)
-        self.sig_attack.emit(ssid.strip(), self._wordlist, mask.strip())
+        self._crack_busy(True)
+        self.sig_attack.emit(ssid.strip(), self._cur_wordlist(), self._cur_tool(),
+                             self.chk_brute.isChecked())
+
+    def _crack_busy(self, busy):
+        self.btn_crack_cancel.setEnabled(busy)
+        for b in (self.btn_crack_local, self.btn_crack_dev, self.btn_attack):
+            b.setEnabled(not busy)
+
+    def _cancel_crack(self):
+        if hasattr(self.worker, "cancel_crack"):
+            self.worker.cancel_crack()
+        self.txt_report.appendPlainText("\n(cancelling…)")
 
     def _do_recon(self):
         self.txt_report.setPlainText("scanning wifi/nrf/rf … (this takes ~%ds)" %
@@ -949,6 +1022,7 @@ class MainWindow(QMainWindow):
         self.worker.report.connect(self.txt_report.setPlainText)
         self.worker.stream_done.connect(self._on_stream_done)
         self.worker.capture_done.connect(self._on_capture_done)
+        self.worker.crack_finished.connect(self._on_crack_finished)
         self.worker.listing.connect(self._on_listing)
         self.worker.heap.connect(self._on_heap)
         self.worker.error.connect(self._on_error)
@@ -982,6 +1056,7 @@ class MainWindow(QMainWindow):
         self.btn_crack_local.clicked.connect(self._crack_local)
         self.btn_crack_dev.clicked.connect(self._crack_device)
         self.btn_attack.clicked.connect(self._do_attack)
+        self.btn_crack_cancel.clicked.connect(self._cancel_crack)
         self.btn_wordlist.clicked.connect(self._pick_wordlist)
         self.btn_fb_up.clicked.connect(self._fb_up)
         self.btn_fb_refresh.clicked.connect(self._fb_refresh)
@@ -1160,6 +1235,10 @@ class MainWindow(QMainWindow):
         if self._last_stream[0] in ("wifi", "nrf", "rf") and events:
             self._analyze_last_stream()
 
+    @Slot()
+    def _on_crack_finished(self):
+        self._crack_busy(False)
+
     @Slot(dict, str)
     def _on_capture_done(self, cap, analysis):
         self.btn_capture.setEnabled(True)
@@ -1225,6 +1304,14 @@ def _mono():
     f.setStyleHint(QFont.Monospace)
     f.setPointSize(9)
     return f
+
+
+def _human_size(n):
+    for u in ("B", "K", "M", "G"):
+        if n < 1024:
+            return f"{n:.0f}{u}"
+        n /= 1024
+    return f"{n:.0f}T"
 
 
 def _wrap(layout):

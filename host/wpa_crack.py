@@ -17,6 +17,7 @@ Crypto (all stdlib hashlib + `cryptography` for AES-CMAC):
 """
 import hashlib
 import hmac
+import os
 import struct
 import sys
 from dataclasses import dataclass, field
@@ -327,6 +328,121 @@ def mask_candidates(mask: str, limit: int = 0):
         n += 1
         if limit and n >= limit:
             return
+
+
+def hc22000(h: "Handshake") -> str:
+    """Export a captured EAPOL handshake as a hashcat 22000 (WPA*02) line, so a
+    fast cracker (hashcat/aircrack-ng) can brute the full keyspace. The EAPOL
+    field is the MIC-bearing frame with the MIC zeroed (as h.eapol already is)."""
+    if not (h.captured_mic and h.anonce and h.eapol and h.ssid):
+        return ""
+    return "*".join([
+        "WPA", "02",
+        h.captured_mic.hex(),
+        h.ap.hex(),
+        h.sta.hex(),
+        h.ssid.encode().hex(),
+        h.anonce.hex(),
+        h.eapol.hex(),
+        "00",  # message pair: M1(ANonce)+M2(SNonce,MIC)
+    ])
+
+
+def export_hc22000(pcap_path: str, out_path: str, ssid_override: str = "") -> int:
+    """Write every crackable EAPOL handshake in a pcap as hashcat 22000 lines.
+    Returns the number written."""
+    _ssids, hss = parse(pcap_path)
+    if ssid_override:
+        for h in hss:
+            h.ssid = ssid_override
+    n = 0
+    with open(out_path, "w") as fh:
+        for h in hss:
+            line = hc22000(h)
+            if line:
+                fh.write(line + "\n")
+                n += 1
+    return n
+
+
+# ── multiprocessing brute (PBKDF2 is the bottleneck; scale across cores) ───────
+_MP_TARGET = None
+
+
+def _mp_init(target):
+    global _MP_TARGET
+    _MP_TARGET = target
+
+
+def _mp_check(batch):
+    for w in batch:
+        if _MP_TARGET.verify(w):
+            return w
+    return None
+
+
+def _chunked(it, size):
+    buf = []
+    for x in it:
+        buf.append(x)
+        if len(buf) >= size:
+            yield buf
+            buf = []
+    if buf:
+        yield buf
+
+
+def brute_mp(target, candidates, processes=0, chunk=256, progress=None):
+    """Brute `target` over an iterable of candidate strings using a process pool.
+    Returns (key|None, tried). progress(tried) is called per finished chunk."""
+    import multiprocessing as mp
+    if processes <= 0:
+        processes = max(1, (os.cpu_count() or 1))
+    tried = 0
+    with mp.Pool(processes, initializer=_mp_init, initargs=(target,)) as pool:
+        for res in pool.imap_unordered(_mp_check, _chunked(candidates, chunk)):
+            tried += chunk
+            if progress:
+                progress(tried)
+            if res is not None:
+                pool.terminate()
+                return res, tried
+    return None, tried
+
+
+def brute_digits_file(pcap_path, length=8, ssid_override="", processes=0,
+                      checkpoint="", slice_size=1_000_000, progress=None, log=None):
+    """Full resumable numeric brute: try every `length`-digit string against the
+    pcap's handshake, multi-core, in slices. `checkpoint` persists the next index
+    so a killed run resumes. Returns dict(ok, key, tried, keyspace)."""
+    target, _ = select_target(pcap_path, ssid_override)
+    if not target:
+        return {"ok": False, "key": None, "error": "no crackable handshake"}
+    keyspace = 10 ** length
+    start = 0
+    if checkpoint and os.path.isfile(checkpoint):
+        try:
+            start = int(open(checkpoint).read().strip() or "0")
+        except Exception:  # noqa: BLE001
+            start = 0
+    fmt = "%0" + str(length) + "d"
+    i = start
+    while i < keyspace:
+        hi = min(i + slice_size, keyspace)
+        gen = (fmt % n for n in range(i, hi))
+        key, _tried = brute_mp(target, gen, processes=processes, chunk=512,
+                               progress=(lambda t, base=i: progress(base + t)) if progress else None)
+        if key is not None:
+            if log:
+                log(f"KEY FOUND: {key}")
+            return {"ok": True, "key": key, "tried": i, "keyspace": keyspace}
+        i = hi
+        if checkpoint:
+            with open(checkpoint, "w") as fh:
+                fh.write(str(i))
+        if log:
+            log(f"checkpoint {i:,}/{keyspace:,} ({100*i/keyspace:.2f}%)")
+    return {"ok": False, "key": None, "tried": keyspace, "keyspace": keyspace}
 
 
 def select_target(pcap_path: str, ssid_override: str = ""):

